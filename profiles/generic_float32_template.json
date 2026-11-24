@@ -1,0 +1,27 @@
+{
+  "description": "TEMPLATE ONLY. Copy this file, rename it after your meter model (for example selec_mfm383a.json), and replace every address with the one in your meter's Modbus manual. These addresses are placeholders and are not from any real meter.",
+  "verified": false,
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "max_block": 100,
+  "registers": {
+    "v1":    {"address": 0,  "type": "float32"},
+    "v2":    {"address": 2,  "type": "float32"},
+    "v3":    {"address": 4,  "type": "float32"},
+    "v_ln":  {"address": 6,  "type": "float32"},
+    "v_ll":  {"address": 14, "type": "float32"},
+    "i1":    {"address": 16, "type": "float32"},
+    "i2":    {"address": 18, "type": "float32"},
+    "i3":    {"address": 20, "type": "float32"},
+    "i_avg": {"address": 22, "type": "float32"},
+    "kw":    {"address": 42, "type": "float32"},
+    "kva":   {"address": 50, "type": "float32"},
+    "kvar":  {"address": 58, "type": "float32"},
+    "pf":    {"address": 66, "type": "float32"},
+    "hz":    {"address": 70, "type": "float32"},
+    "kwh":   {"address": 72, "type": "float32"},
+    "kvah":  {"address": 76, "type": "float32"},
+    "kvarh": {"address": 80, "type": "float32"}
+  }
+}

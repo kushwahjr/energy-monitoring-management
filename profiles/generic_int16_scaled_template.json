@@ -1,0 +1,17 @@
+{
+  "description": "TEMPLATE ONLY, for meters that send whole numbers with a scale factor (for example voltage x10). Replace addresses and scales from your meter's Modbus manual. Placeholders, not from a real meter.",
+  "verified": false,
+  "register_type": "input",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "v_ln":  {"address": 0,  "type": "uint16", "scale": 0.1},
+    "i_avg": {"address": 1,  "type": "uint16", "scale": 0.01},
+    "kw":    {"address": 2,  "type": "int16",  "scale": 0.1},
+    "kva":   {"address": 3,  "type": "uint16", "scale": 0.1},
+    "pf":    {"address": 4,  "type": "int16",  "scale": 0.001},
+    "hz":    {"address": 5,  "type": "uint16", "scale": 0.01},
+    "kwh":   {"address": 10, "type": "uint32", "scale": 0.1},
+    "kvah":  {"address": 12, "type": "uint32", "scale": 0.1}
+  }
+}

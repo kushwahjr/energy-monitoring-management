@@ -1,0 +1,80 @@
+# Steel Energy Logger
+
+Logs electricity data from multifunction meters (MFMs) in a steel plant and shows it on
+Windows, macOS, Android and iPhone. Data is kept on a plant PC and, optionally, copied to a
+cloud server so it can be seen from anywhere.
+
+```
+ Meters ── RS485 / Ethernet / Gateway ──▶ Plant PC (logger + dashboard) ──internet──▶ Cloud server (dashboard + login)
+                                              ▲   plant LAN / Wi-Fi                        ▲  anywhere
+                                     Windows · Mac · phones                       Windows · Mac · phones
+```
+
+## What it does
+
+- Reads meters over **Modbus RTU on RS485**, **Modbus TCP on Ethernet**, or through a **gateway**
+  (Modbus TCP gateway, or a transparent serial-over-TCP gateway). Chosen per connection, many meters per RS485 line or gateway.
+- Supports **many meter models**: each model is a register map in `profiles/` (or added on the Settings page).
+- Logs voltage (per phase, L-N, L-L), current, kW, kVA, kVAr, PF, frequency, kWh, kVAh, kVArh and THD.
+  Values are averaged between log writes; energy registers store the latest value.
+- **Dashboard**: plant load, PF, energy today, max demand, live meter cards, trends (1 hour to 30 days).
+- **Reports**: daily kWh / kVAh / kVArh, average PF, **maximum demand in 15-minute blocks** (with time), peak kW. CSV export for Excel.
+- **Alarms**: low PF, high kVA/kW, voltage out of range, high current, high voltage THD, meter offline. All logged with time.
+- **Cloud sync**: the plant PC pushes data every 30 s. If the internet drops, data waits on the PC and is sent later.
+- **Login** on the cloud server (and optionally on the plant PC). Viewer and admin roles.
+- Installs as an app (PWA): in Chrome or Edge choose *Install app*; on a phone choose *Add to Home screen*.
+- A built-in **meter simulator**, so everything can be tried before connecting real meters.
+
+## Quick start (try it with simulated meters)
+
+Needs Python 3.10 or newer.
+
+- **Windows**: double-click `start-windows.bat`
+- **macOS**: double-click `start-mac.command` (first time: right-click, Open)
+- Or by hand: `pip install -r requirements.txt` then `python run.py`
+
+Open <http://localhost:8080>. Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
+To fill a week of demo history: `python tools/seed_demo.py --config config.json`.
+
+## Connecting real meters
+
+Open **Settings** on the plant PC itself (settings are only editable from the PC, or by an admin user).
+
+1. **Connections**: add one per RS485 port (COM3, `/dev/ttyUSB0`, with baud rate, parity, stop bits as set on the meters),
+   per Ethernet meter (IP, port 502), or per gateway (IP, port, and gateway type).
+2. **Meter models**: the shipped profiles are **templates with placeholder addresses**. For each model you use,
+   add its register map from the meter's Modbus manual (address, `float32`/`int16`/`uint32`…, scale, holding or input
+   registers, word order). Save it as `profiles/<model>.json` or paste it into the Settings page.
+   If your manual numbers registers from 1 or as 40001…, set `"address_offset": -1` or subtract 40001.
+3. **Meters**: name, area, connection, model, Modbus address (slave ID), contract demand, and whether it is a
+   **main incomer** (plant totals use main incomers, so feeders are not counted twice).
+4. Press **Test reading** to check the wiring, then **Save and restart logging**.
+
+## Cloud server
+
+Run the same program on any cloud VM (or with the `Dockerfile`) in cloud mode:
+
+1. Copy `cloud.example.json` to `config.json` on the server.
+2. `python run.py new-key` → put the output in `secret_key`, and again for each plant in `ingest_keys`.
+3. `python run.py hash-password` → put the output in `users`.
+4. Put it behind HTTPS (for example Caddy or nginx with a certificate). Do not expose it over plain HTTP.
+5. On each plant PC: Settings → Cloud sync → server address and that plant's key.
+
+The cloud dashboard shows all plants together, grouped by plant and area.
+
+## Project layout
+
+```
+energylogger/   config, Modbus readers, collector, database, reports, cloud sync, login, web API
+web/            dashboard (plain HTML/JS/CSS, works without internet)
+profiles/       meter model register maps
+tools/          fake_meter.py (Modbus test meter / gateway), seed_demo.py
+tests/          end-to-end and report tests:  python -m pytest -q tests
+```
+
+## Not done yet
+
+- Real register maps for your meter models (send the model names or manuals).
+- Native installers (a Windows `.exe` service and a Mac app). For now the start scripts are used.
+- Email / SMS / WhatsApp alarm alerts, monthly bill-style reports, shift-wise (A/B/C) reports.
+- Production-per-tonne (kWh/ton) reports if furnace tonnage is entered.

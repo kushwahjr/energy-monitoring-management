@@ -1,0 +1,18 @@
+{
+  "mode": "cloud",
+  "plant_name": "All plants",
+  "timezone": "Asia/Kolkata",
+  "database": "data/cloud.db",
+  "listen_host": "0.0.0.0",
+  "listen_port": 8080,
+  "demand_block_minutes": 15,
+  "secret_key": "REPLACE-with-output-of: python run.py new-key",
+  "ingest_keys": {
+    "plant1": "REPLACE-with-output-of: python run.py new-key"
+  },
+  "users": [
+    {"username": "admin", "password_hash": "REPLACE-with-output-of: python run.py hash-password", "role": "admin"}
+  ],
+  "ports": {},
+  "meters": []
+}
