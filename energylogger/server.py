@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import csv
+import re
 import dataclasses
 import hmac
 import io
@@ -77,7 +79,7 @@ class App:
                 port = self.config.ports[m.port]
                 out.append({
                     "id": m.id, "name": m.name, "area": m.area, "plant_id": self.config.plant_id,
-                    "plant_name": self.config.plant_name, "contract_kva": m.contract_kva, "is_main": m.is_main,
+                    "plant_name": self.config.plant_name, "contract_kva": m.contract_kva, "is_main": m.is_main, "machine": m.machine,
                     "enabled": m.enabled, "connection": port.kind, "profile": m.profile,
                     "online": bool(st and st.online), "last_seen": st.last_ok if st else None,
                     "error": st.last_error if st else None,
@@ -98,7 +100,7 @@ class App:
             out.append({
                 "id": m["id"], "name": m["name"], "area": m["area"], "plant_id": m["plant_id"],
                 "plant_name": self.db.get_kv(f"plant_name:{m['plant_id']}", m["plant_id"]),
-                "contract_kva": m["contract_kva"], "is_main": bool(m["is_main"]), "enabled": True, "connection": "cloud",
+                "contract_kva": m["contract_kva"], "is_main": bool(m["is_main"]), "machine": m["machine"], "enabled": True, "connection": "cloud",
                 "online": online, "last_seen": r["ts"] if r is not None else None,
                 "error": None if online else "No data from plant in the last 5 minutes",
                 "values": values, "alarms": list(check_alarms(meter, values).values()) if online else [],
@@ -167,7 +169,86 @@ def create_app(config_path: str | Path) -> FastAPI:
             "params": PARAMS, "demand_block_minutes": cfg.demand_block_minutes,
             "poll_seconds": cfg.poll_seconds, "log_seconds": cfg.log_seconds,
             "timezone": str(state.tz), "cloud_sync": state.syncer.status if state.syncer else None,
+            "branding": branding_public(),
         }
+
+    # ---------- branding (company name, logo, colours) ----------
+    LOGO_TYPES = {"png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg", "svg+xml": "image/svg+xml", "webp": "image/webp"}
+
+    def branding_dir() -> Path:
+        return state.config.database.parent / "branding"
+
+    def branding_public() -> dict:
+        b = state.raw.get("branding", {})
+        logo = b.get("logo")
+        has_logo = bool(logo) and (branding_dir() / logo).exists()
+        return {
+            "company_name": b.get("company_name", ""),
+            "accent": b.get("accent", "#ff7a1a"),
+            "theme": b.get("theme", "dark"),
+            "logo_url": f"/branding/{logo}?v={int((branding_dir() / logo).stat().st_mtime)}" if has_logo else None,
+        }
+
+    def save_raw():
+        tmp = state.config_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state.raw, indent=2), encoding="utf-8")
+        tmp.replace(state.config_path)
+
+    @api.put("/api/branding")
+    async def put_branding(body: dict, _=Depends(need_admin)):
+        b = dict(state.raw.get("branding", {}))
+        if "company_name" in body:
+            b["company_name"] = str(body["company_name"]).strip()[:80]
+        if "plant_name" in body and str(body["plant_name"]).strip():
+            state.raw["plant_name"] = str(body["plant_name"]).strip()[:80]
+            state.config.plant_name = state.raw["plant_name"]
+        if "accent" in body:
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(body["accent"])):
+                raise HTTPException(400, "Pick the colour as a 6-digit hex code like #ff7a1a")
+            b["accent"] = body["accent"].lower()
+        if "theme" in body:
+            if body["theme"] not in ("dark", "light", "auto"):
+                raise HTTPException(400, "Theme must be dark, light or auto")
+            b["theme"] = body["theme"]
+        state.raw["branding"] = b
+        save_raw()
+        return branding_public()
+
+    @api.post("/api/branding/logo")
+    async def put_logo(body: dict, _=Depends(need_admin)):
+        """Body: {"data_url": "data:image/png;base64,..."} or {"remove": true}."""
+        b = dict(state.raw.get("branding", {}))
+        d = branding_dir()
+        if body.get("remove"):
+            if b.get("logo"):
+                (d / b["logo"]).unlink(missing_ok=True)
+            b.pop("logo", None)
+        else:
+            m = re.fullmatch(r"data:image/(png|jpeg|jpg|svg\+xml|webp);base64,([A-Za-z0-9+/=\s]+)", str(body.get("data_url", "")))
+            if not m:
+                raise HTTPException(400, "Upload a PNG, JPG, SVG or WebP image")
+            data = base64.b64decode(m.group(2))
+            if len(data) > 1_000_000:
+                raise HTTPException(400, "The logo must be smaller than 1 MB")
+            ext = {"jpeg": "jpg", "svg+xml": "svg"}.get(m.group(1), m.group(1))
+            d.mkdir(parents=True, exist_ok=True)
+            if b.get("logo"):
+                (d / b["logo"]).unlink(missing_ok=True)
+            b["logo"] = f"logo.{ext}"
+            (d / b["logo"]).write_bytes(data)
+        state.raw["branding"] = b
+        save_raw()
+        return branding_public()
+
+    @api.get("/branding/{name}")
+    async def branding_file(name: str):
+        logo = state.raw.get("branding", {}).get("logo")
+        if not logo or name != logo or not (branding_dir() / logo).exists():
+            raise HTTPException(404)
+        media = LOGO_TYPES.get(logo.rsplit(".", 1)[-1].replace("svg", "svg+xml"), "application/octet-stream")
+        # SVG logos may not run scripts
+        return FileResponse(branding_dir() / logo, media_type=media,
+                            headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'", "Cache-Control": "max-age=86400"})
 
     # ---------- live data and history ----------
     @api.get("/api/meters")
@@ -286,6 +367,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         if "secret_key" in state.raw:
             raw["secret_key"] = state.raw["secret_key"]
         raw["users"] = state.raw.get("users", [])  # users are managed in config.json only
+        raw["branding"] = state.raw.get("branding", {})  # managed on the Branding tab
         try:
             await state.apply_settings(raw)
         except ConfigError as e:

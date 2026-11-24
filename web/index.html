@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1f2937">
+<meta name="theme-color" content="#1c2026">
 <title>Energy Monitoring Management</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -11,19 +11,32 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="top">
-  <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"><div><b id="plantName">Energy Monitoring Management</b><small id="modeLine"></small></div></div>
-  <nav id="nav">
-    <a href="#/" data-route="overview">Overview</a>
-    <a href="#/reports" data-route="reports">Reports</a>
-    <a href="#/events" data-route="events">Alarms</a>
-    <a href="#/settings" data-route="settings" id="navSettings" hidden>Settings</a>
-  </nav>
-  <div class="who"><span id="syncBadge" class="badge" hidden></span><button id="logoutBtn" class="ghost" hidden>Sign out</button></div>
-</header>
-<main id="view"><p class="muted pad">Loading…</p></main>
+<div class="shell">
+  <aside class="rail" id="rail">
+    <a class="brand" href="#/">
+      <span class="logo" id="brandLogo"><svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true"><path d="M36 6 16 36h14l-4 22 22-32H34z" fill="currentColor"/></svg></span>
+      <span class="names"><b id="companyName">Energy Monitoring</b><small id="plantName"></small></span>
+    </a>
+    <nav id="nav" aria-label="Main">
+      <a href="#/" data-route="overview"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Plant</span></a>
+      <a href="#/reports" data-route="reports"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg><span>Reports</span></a>
+      <a href="#/events" data-route="events"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4M12 17v.5"/></svg><span>Alarms</span><em id="alarmCount" hidden></em></a>
+      <a href="#/settings" data-route="settings" id="navSettings" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="rail-foot">
+      <span id="syncBadge" class="badge" hidden></span>
+      <div class="row tight">
+        <button id="themeBtn" class="ghost icon" title="Switch light / dark" aria-label="Switch light or dark screen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg></button>
+        <button id="logoutBtn" class="ghost" hidden>Sign out</button>
+      </div>
+      <small class="clock" id="clock"></small>
+    </div>
+  </aside>
+  <main id="view"><p class="muted pad">Loading…</p></main>
+</div>
 <div id="toast" role="status" hidden></div>
 <script src="chart.js"></script>
+<script src="mimic.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

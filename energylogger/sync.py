@@ -43,7 +43,7 @@ class CloudSyncer:
 
     def _meters_payload(self):
         return [
-            {"id": m.id, "name": m.name, "area": m.area, "contract_kva": m.contract_kva, "is_main": m.is_main,
+            {"id": m.id, "name": m.name, "area": m.area, "contract_kva": m.contract_kva, "is_main": m.is_main, "machine": m.machine,
              "alarms": {k: v for k, v in dataclasses.asdict(m.alarms).items() if v is not None}}
             for m in self.config.meters
         ]

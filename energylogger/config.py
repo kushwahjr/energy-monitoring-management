@@ -84,6 +84,7 @@ class Meter:
     enabled: bool = True
     contract_kva: float | None = None
     is_main: bool = False  # main incomer: counted in the plant total (feeders are not, to avoid double counting)
+    machine: str = ""  # picture shown on the plant diagram, e.g. "induction_furnace"
     alarms: Alarms = field(default_factory=Alarms)
 
 
@@ -223,6 +224,7 @@ def parse_config(raw: dict, base: Path) -> Config:
                 enabled=bool(m.get("enabled", True)),
                 contract_kva=m.get("contract_kva"),
                 is_main=bool(m.get("is_main", False)),
+                machine=str(m.get("machine", ""))[:40],
                 alarms=alarms,
             )
         )

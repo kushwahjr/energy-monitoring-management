@@ -158,3 +158,26 @@ def test_settings_change_from_plant_pc(stack):
     saved = json.loads((stack["tmp"] / "plant.json").read_text())
     assert saved["cloud_sync"]["api_key"] == "key-A"  # secret kept
     wait_for(lambda: any(m["id"] == "new1" and m["online"] for m in httpx.get(p + "/api/meters").json()["meters"]))
+
+
+def test_branding_logo_and_machine_type(stack):
+    import base64
+    p = stack["plant"]
+    png = base64.b64encode(bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+        "1f15c4890000000d49444154789c6360000002000005000155f5b0bb0000000049454e44ae426082")).decode()
+    b = httpx.post(p + "/api/branding/logo", json={"data_url": "data:image/png;base64," + png}).json()
+    assert b["logo_url"].startswith("/branding/logo.png")
+    assert httpx.get(p + b["logo_url"]).headers["content-type"] == "image/png"
+    assert httpx.post(p + "/api/branding/logo", json={"data_url": "data:text/html;base64,PGgxPg=="}).status_code == 400
+    b = httpx.put(p + "/api/branding", json={"company_name": "Test Steel", "accent": "#2f9bff", "theme": "light"}).json()
+    assert b["company_name"] == "Test Steel" and b["accent"] == "#2f9bff"
+    assert httpx.put(p + "/api/branding", json={"accent": "red"}).status_code == 400
+    assert httpx.get(p + "/api/info").json()["branding"]["theme"] == "light"
+    # machine picture travels with the meter
+    cfg = httpx.get(p + "/api/settings").json()["config"]
+    cfg["meters"][0]["machine"] = "arc_furnace"
+    assert httpx.put(p + "/api/settings", json={"config": cfg}).json()["ok"]
+    ms = {m["id"]: m for m in httpx.get(p + "/api/meters").json()["meters"]}
+    assert ms[cfg["meters"][0]["id"]]["machine"] == "arc_furnace"
+    assert httpx.get(p + "/api/info").json()["branding"]["company_name"] == "Test Steel"  # settings save keeps branding

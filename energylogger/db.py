@@ -22,8 +22,14 @@ class Database:
             self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_meter_ts ON readings(meter_id, ts)")
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS meters (id TEXT PRIMARY KEY, plant_id TEXT NOT NULL, name TEXT NOT NULL,"
-                " area TEXT NOT NULL, contract_kva REAL, is_main INTEGER NOT NULL DEFAULT 0, alarms TEXT NOT NULL DEFAULT '{}', updated INTEGER NOT NULL)"
+                " area TEXT NOT NULL, contract_kva REAL, is_main INTEGER NOT NULL DEFAULT 0, machine TEXT NOT NULL DEFAULT '', alarms TEXT NOT NULL DEFAULT '{}', updated INTEGER NOT NULL)"
             )
+            # upgrade databases made by older versions
+            have = {r[1] for r in self.conn.execute("PRAGMA table_info(meters)")}
+            if "is_main" not in have:
+                self.conn.execute("ALTER TABLE meters ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0")
+            if "machine" not in have:
+                self.conn.execute("ALTER TABLE meters ADD COLUMN machine TEXT NOT NULL DEFAULT ''")
             self.conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, meter_id TEXT NOT NULL, kind TEXT NOT NULL,"
@@ -50,11 +56,11 @@ class Database:
         import json, time
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO meters (id, plant_id, name, area, contract_kva, is_main, alarms, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO meters (id, plant_id, name, area, contract_kva, is_main, machine, alarms, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(id) DO UPDATE SET plant_id=excluded.plant_id, name=excluded.name, area=excluded.area,"
-                " contract_kva=excluded.contract_kva, is_main=excluded.is_main, alarms=excluded.alarms, updated=excluded.updated",
+                " contract_kva=excluded.contract_kva, is_main=excluded.is_main, machine=excluded.machine, alarms=excluded.alarms, updated=excluded.updated",
                 (m["id"], m.get("plant_id", ""), m.get("name", m["id"]), m.get("area", ""), m.get("contract_kva"),
-                 int(bool(m.get("is_main"))), json.dumps(m.get("alarms", {})), int(time.time())),
+                 int(bool(m.get("is_main"))), str(m.get("machine") or "")[:40], json.dumps(m.get("alarms", {})), int(time.time())),
             )
 
     def meters(self):

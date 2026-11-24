@@ -36,6 +36,19 @@ Needs Python 3.10 or newer.
 Open <http://localhost:8080>. Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
 To fill a week of demo history: `python tools/seed_demo.py --config config.json`.
 
+## Your company's look
+
+Settings → **Branding** (admin only):
+- Company name and plant name, shown in the side bar, the browser tab and the sign-in page.
+- **Logo**: drop a PNG, JPG, SVG or WebP file (under 1 MB). It is stored on the PC next to the database.
+- **Company colour**: used for live power flow, charts and buttons. Red always stays for alarms.
+- **Screen**: dark (control room), light (office) or follow the device. Anyone can still flip it with the sun button.
+
+Settings → **Machines and meters**: pick a **picture** for each machine (transformer, induction furnace,
+arc furnace, ladle furnace, rolling mill, continuous caster, compressor, motor/pump, fan, EOT crane,
+DG set, capacitor bank, lighting, office, other) and whether it sits above the busbar as a **main incomer**
+or below it as a feeder. The Plant page draws the single-line diagram from this.
+
 ## Connecting real meters
 
 Open **Settings** on the plant PC itself (settings are only editable from the PC, or by an admin user).
