@@ -6,6 +6,7 @@ import base64
 import csv
 import re
 import dataclasses
+import hashlib
 import hmac
 import io
 import json
@@ -80,6 +81,7 @@ class App:
                 out.append({
                     "id": m.id, "name": m.name, "area": m.area, "plant_id": self.config.plant_id,
                     "plant_name": self.config.plant_name, "contract_kva": m.contract_kva, "is_main": m.is_main, "machine": m.machine,
+                    "picture_url": self.picture_url(m.id),
                     "enabled": m.enabled, "connection": port.kind, "profile": m.profile,
                     "online": bool(st and st.online), "last_seen": st.last_ok if st else None,
                     "error": st.last_error if st else None,
@@ -106,6 +108,13 @@ class App:
                 "values": values, "alarms": list(check_alarms(meter, values).values()) if online else [],
             })
         return out
+
+    def picture_url(self, meter_id: str) -> str | None:
+        name = self.raw.get("branding", {}).get("machine_pictures", {}).get(meter_id)
+        if not name:
+            return None
+        f = self.config.database.parent / "branding" / "machines" / name
+        return f"/branding/machines/{name}?v={int(f.stat().st_mtime)}" if f.exists() else None
 
     def meter_ids(self) -> list[str]:
         if self.config.mode == "plant":
@@ -214,6 +223,74 @@ def create_app(config_path: str | Path) -> FastAPI:
         save_raw()
         return branding_public()
 
+    def decode_image(body: dict, what: str) -> tuple[bytes, str]:
+        m = re.fullmatch(r"data:image/(png|jpeg|jpg|svg\+xml|webp);base64,([A-Za-z0-9+/=\s]+)", str(body.get("data_url", "")))
+        if not m:
+            raise HTTPException(400, "Upload a PNG, JPG, SVG or WebP image")
+        data = base64.b64decode(m.group(2))
+        if len(data) > 1_000_000:
+            raise HTTPException(400, f"The {what} must be smaller than 1 MB")
+        return data, {"jpeg": "jpg", "svg+xml": "svg"}.get(m.group(1), m.group(1))
+
+    def image_response(path: Path):
+        media = LOGO_TYPES.get(path.suffix[1:].replace("svg", "svg+xml"), "application/octet-stream")
+        # SVG files may not run scripts
+        return FileResponse(path, media_type=media,
+                            headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'", "Cache-Control": "max-age=86400"})
+
+    def raw_meter(meter_id: str) -> dict:
+        if state.config.mode != "plant":
+            raise HTTPException(400, "Machines are changed on the plant PC")
+        for rm in state.raw.get("meters", []):
+            if rm.get("id") == meter_id:
+                return rm
+        raise HTTPException(404, "No machine with that ID")
+
+    @api.patch("/api/machines/{meter_id}")
+    async def edit_machine(meter_id: str, body: dict, _=Depends(need_admin)):
+        """Rename a machine or change its picture without restarting logging."""
+        rm = raw_meter(meter_id)
+        live = next(m for m in state.config.meters if m.id == meter_id)
+        if "name" in body:
+            name = str(body["name"]).strip()[:60]
+            if not name:
+                raise HTTPException(400, "The machine needs a name")
+            rm["name"] = live.name = name
+        if "area" in body:
+            rm["area"] = live.area = str(body["area"]).strip()[:60]
+        if "machine" in body:
+            rm["machine"] = live.machine = str(body["machine"] or "")[:40]
+        save_raw()
+        return next(x for x in state.meter_list() if x["id"] == meter_id)
+
+    @api.post("/api/machines/{meter_id}/picture")
+    async def machine_picture(meter_id: str, body: dict, _=Depends(need_admin)):
+        """Body: {"data_url": ...} to use your own photo or drawing, or {"remove": true} to go back to the built-in one."""
+        raw_meter(meter_id)
+        b = state.raw.setdefault("branding", {})
+        pics = b.setdefault("machine_pictures", {})
+        d = branding_dir() / "machines"
+        data, ext = (None, None) if body.get("remove") else decode_image(body, "picture")  # check before removing the old one
+        if pics.get(meter_id):
+            (d / pics[meter_id]).unlink(missing_ok=True)
+            pics.pop(meter_id)
+        if data is not None:
+            safe = re.sub(r"[^A-Za-z0-9_-]", "_", meter_id)[:40] + "-" + hashlib.sha1(meter_id.encode()).hexdigest()[:6]
+            d.mkdir(parents=True, exist_ok=True)
+            pics[meter_id] = f"{safe}.{ext}"
+            (d / pics[meter_id]).write_bytes(data)
+        save_raw()
+        return {"picture_url": state.picture_url(meter_id)}
+
+    @api.get("/branding/machines/{name}")
+    async def machine_picture_file(name: str):
+        if name not in state.raw.get("branding", {}).get("machine_pictures", {}).values():
+            raise HTTPException(404)
+        f = branding_dir() / "machines" / name
+        if not f.exists():
+            raise HTTPException(404)
+        return image_response(f)
+
     @api.post("/api/branding/logo")
     async def put_logo(body: dict, _=Depends(need_admin)):
         """Body: {"data_url": "data:image/png;base64,..."} or {"remove": true}."""
@@ -224,13 +301,7 @@ def create_app(config_path: str | Path) -> FastAPI:
                 (d / b["logo"]).unlink(missing_ok=True)
             b.pop("logo", None)
         else:
-            m = re.fullmatch(r"data:image/(png|jpeg|jpg|svg\+xml|webp);base64,([A-Za-z0-9+/=\s]+)", str(body.get("data_url", "")))
-            if not m:
-                raise HTTPException(400, "Upload a PNG, JPG, SVG or WebP image")
-            data = base64.b64decode(m.group(2))
-            if len(data) > 1_000_000:
-                raise HTTPException(400, "The logo must be smaller than 1 MB")
-            ext = {"jpeg": "jpg", "svg+xml": "svg"}.get(m.group(1), m.group(1))
+            data, ext = decode_image(body, "logo")
             d.mkdir(parents=True, exist_ok=True)
             if b.get("logo"):
                 (d / b["logo"]).unlink(missing_ok=True)
@@ -245,10 +316,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         logo = state.raw.get("branding", {}).get("logo")
         if not logo or name != logo or not (branding_dir() / logo).exists():
             raise HTTPException(404)
-        media = LOGO_TYPES.get(logo.rsplit(".", 1)[-1].replace("svg", "svg+xml"), "application/octet-stream")
-        # SVG logos may not run scripts
-        return FileResponse(branding_dir() / logo, media_type=media,
-                            headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'", "Cache-Control": "max-age=86400"})
+        return image_response(branding_dir() / logo)
 
     # ---------- live data and history ----------
     @api.get("/api/meters")

@@ -199,10 +199,26 @@ async function viewMeter(id) {
     if (!m) { v.innerHTML = `<p class="pad">This meter isn't set up any more. <a href="#/">Back to the plant</a></p>`; return; }
     const stt = !m.online ? "off" : m.alarms.length ? "alarm" : "on";
     const kind = MACHINES[guessMachine(m)];
-    $("#mHead").innerHTML = `<div class="meter-head ${stt}"><div class="pic">${machineIcon(guessMachine(m), 64)}</div>
-      <div><h1>${esc(m.name)}</h1><div class="sub">${esc([kind.label, m.area, CONN[m.connection]].filter(Boolean).join(", "))}</div>
+    const canEdit = S.info.mode === "plant" && S.info.user && S.info.user.role === "admin";
+    if ($("#mEdit") && $("#mEdit").contains(document.activeElement)) return m; // don't redraw while typing
+    $("#mHead").innerHTML = `<div class="meter-head ${stt}"><${canEdit ? `button class="pic pic-edit" id="mPic" title="Change picture" aria-label="Change picture"` : `div class="pic"`}>${machinePic(m, 64)}${canEdit ? `<span class="pic-pen">Change</span>` : ""}</${canEdit ? "button" : "div"}>
+      <div class="grow"><div id="mEdit" hidden class="row"><input id="mName" value="${esc(m.name)}" aria-label="Machine name" maxlength="60"><input id="mArea" value="${esc(m.area || "")}" placeholder="Area" aria-label="Area" maxlength="60"><button class="primary" id="mSave">Save</button><button class="ghost" id="mCancel">Cancel</button></div>
+      <div class="row" id="mTitle"><h1>${esc(m.name)}</h1>${canEdit ? `<button class="ghost small" id="mRename">Rename</button>` : ""}</div><div class="sub">${esc([kind.label, m.area, CONN[m.connection]].filter(Boolean).join(", "))}</div>
       <div class="row" style="margin-top:6px">${m.online ? (m.alarms.length ? `<span class="badge bad">${esc(m.alarms.join("; "))}</span>` : `<span class="badge ok">Running normally</span>`) : `<span class="badge bad">${esc(m.error || "No data")}</span>`}
       ${m.last_seen ? `<span class="hint">updated ${new Date(m.last_seen * 1000).toLocaleTimeString()}</span>` : ""}</div></div></div>`;
+    if (canEdit) {
+      $("#mPic").onclick = () => pickMachine({ meter: m, current: m.machine, title: `Picture for ${m.name}`,
+        onPick: async key => { await api(`/api/machines/${encodeURIComponent(m.id)}`, { method: "PATCH", body: JSON.stringify({ machine: key }) }); toast("Picture changed."); drawHead(); },
+        onUpload: () => { toast("Picture saved."); drawHead(); } });
+      $("#mRename").onclick = () => { $("#mEdit").hidden = false; $("#mTitle").hidden = true; $("#mName").focus(); $("#mName").select(); };
+      $("#mCancel").onclick = () => { $("#mEdit").hidden = true; $("#mTitle").hidden = false; };
+      const save = async () => {
+        try { await api(`/api/machines/${encodeURIComponent(m.id)}`, { method: "PATCH", body: JSON.stringify({ name: $("#mName").value, area: $("#mArea").value }) }); document.activeElement.blur(); toast("Name saved."); drawHead(); }
+        catch (e) { toast(e.message); }
+      };
+      $("#mSave").onclick = save;
+      $("#mEdit").onkeydown = e => { if (e.key === "Enter") save(); if (e.key === "Escape") $("#mCancel").click(); };
+    }
     $("#mParams").innerHTML = GROUPS.map(([g, keys]) => {
       const ks = keys.filter(k => m.values[k] != null);
       return ks.length ? `<div class="group"><h3>${g}</h3><dl>${ks.map(k => `<dt>${esc(P(k).label)}</dt><dd>${fmtNum(m.values[k], k === "pf" ? 3 : undefined)}<small>${esc(P(k).unit)}</small></dd>`).join("")}</dl></div>` : "";
@@ -234,6 +250,65 @@ async function viewMeter(id) {
   let n = 0;
   S.timer = setInterval(() => { drawHead(); if (++n % 6 === 0) drawChart(); }, S.info.mode === "cloud" ? 15000 : 5000);
   window.onresize = () => S.route === "meter" && drawChart();
+}
+
+// The saved meter's uploaded picture applies while editing it in Settings.
+function liveMeter(m) {
+  const saved = m.id && S.meters.find(x => x.id === m.id);
+  return saved && saved.picture_url ? { ...m, picture_url: saved.picture_url } : m;
+}
+
+// ---------------- machine picture picker ----------------
+// opts: { current, meter (saved meter from /api/meters, enables "your own picture"), title, onPick(key), onUpload(url) }
+function pickMachine(opts) {
+  const old = $("#picker"); if (old) old.remove();
+  const groups = {};
+  Object.entries(MACHINES).forEach(([k, d]) => (groups[d.group || "Other"] ||= []).push([k, d]));
+  const m = opts.meter;
+  const box = document.createElement("div");
+  box.id = "picker"; box.className = "picker-back";
+  box.innerHTML = `<div class="picker" role="dialog" aria-modal="true" aria-label="Choose a picture">
+    <div class="row picker-top"><h2>${esc(opts.title || "Choose a picture")}</h2><div class="spacer"></div>
+      <input type="search" id="pkFind" placeholder="Search, e.g. slitter" aria-label="Search pictures"><button class="ghost" id="pkClose" aria-label="Close">✕</button></div>
+    <div class="picker-body">
+      ${m ? `<div class="pk-group"><h3>Your own picture</h3><div class="pk-grid">
+        ${m.picture_url ? `<button class="pk on" data-own="keep"><span class="pk-pic">${machinePic(m, 56)}</span><span>Uploaded picture</span></button>` : ""}
+        <label class="pk pk-up"><input type="file" id="pkFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden><span class="pk-pic pk-plus">+</span><span>${m.picture_url ? "Upload a different one" : "Upload a photo or drawing"}</span></label>
+        ${m.picture_url ? `<button class="pk" data-own="remove"><span class="pk-pic pk-plus">↺</span><span>Remove my picture</span></button>` : ""}
+      </div><p class="hint">PNG, JPG, SVG or WebP under 1 MB. A square photo of the machine works best.</p></div>` : ""}
+      <div class="pk-group"><h3>Automatic</h3><div class="pk-grid"><button class="pk ${!opts.current && !(m && m.picture_url) ? "on" : ""}" data-key=""><span class="pk-pic">${machineIcon(guessMachine({ name: (m && m.name) || opts.name || "", area: (m && m.area) || "" }), 56)}</span><span>Pick from the name</span></button></div></div>
+      ${Object.entries(groups).map(([g, list]) => `<div class="pk-group"><h3>${esc(g)}</h3><div class="pk-grid">
+        ${list.map(([k, d]) => `<button class="pk ${opts.current === k && !(m && m.picture_url) ? "on" : ""}" data-key="${k}" data-find="${esc((d.label + " " + k + " " + g).toLowerCase())}"><span class="pk-pic">${machineIcon(k, 56)}</span><span>${esc(d.label)}</span></button>`).join("")}
+      </div></div>`).join("")}
+    </div></div>`;
+  document.body.appendChild(box);
+  const close = () => { box.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  box.onclick = e => { if (e.target === box) close(); };
+  $("#pkClose").onclick = close;
+  $("#pkFind").oninput = e => {
+    const q = e.target.value.trim().toLowerCase();
+    box.querySelectorAll("[data-find]").forEach(b => (b.hidden = !!q && !b.dataset.find.includes(q)));
+    box.querySelectorAll(".pk-group").forEach(g => (g.hidden = !!q && ![...g.querySelectorAll("[data-find]")].some(b => !b.hidden)));
+  };
+  box.querySelectorAll("[data-key]").forEach(b => (b.onclick = async () => {
+    try {
+      if (m && m.picture_url) await api(`/api/machines/${encodeURIComponent(m.id)}/picture`, { method: "POST", body: JSON.stringify({ remove: true }) });
+      await opts.onPick(b.dataset.key); close();
+    } catch (e) { toast(e.message); }
+  }));
+  const own = async body => {
+    try { const r = await api(`/api/machines/${encodeURIComponent(m.id)}/picture`, { method: "POST", body: JSON.stringify(body) }); close(); opts.onUpload && opts.onUpload(r.picture_url); }
+    catch (e) { toast(e.message); }
+  };
+  box.querySelectorAll("[data-own]").forEach(b => (b.onclick = () => (b.dataset.own === "keep" ? close() : own({ remove: true }))));
+  if ($("#pkFile")) $("#pkFile").onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 1_000_000) return toast("That picture is over 1 MB. Save a smaller version and try again.");
+    const r = new FileReader(); r.onload = () => own({ data_url: r.result }); r.readAsDataURL(f);
+  };
+  if (matchMedia("(pointer: fine)").matches) setTimeout(() => $("#pkFind").focus(), 0); // no pop-up keyboard on phones
 }
 
 // ---------------- reports ----------------
@@ -398,11 +473,11 @@ async function viewSettings(preloaded) {
     </div></div>`;
 
   const meterForm = (m, i) => `<div class="settings-item" data-meter="${i}">
-    <div class="row"><span data-pic>${machineIcon(guessMachine(m), 36)}</span><b>${esc(m.name || m.id || "New machine")}</b><div class="spacer"></div><span class="hint" data-test-out></span>
+    <div class="row"><span data-pic>${machinePic(liveMeter(m), 36)}</span><b>${esc(m.name || m.id || "New machine")}</b><div class="spacer"></div><span class="hint" data-test-out></span>
       <button data-test="${i}">Test reading</button><button class="danger ghost" data-del-meter="${i}">Remove</button></div>
     <div class="form">
       <label class="f">Name<input data-k="name" value="${esc(m.name || "")}" placeholder="Induction Furnace 1"></label>
-      <label class="f">Picture on diagram<select data-k="machine"><option value="">Pick from the name</option>${Object.entries(MACHINES).map(([k, d]) => `<option value="${k}" ${m.machine === k ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>
+      <label class="f">Picture on diagram<input type="hidden" data-k="machine" value="${esc(m.machine || "")}"><button type="button" class="pick-btn" data-pick>${esc(m.machine && MACHINES[m.machine] ? MACHINES[m.machine].label : "Pick from the name")}</button></label>
       <label class="f">Area<input data-k="area" value="${esc(m.area || "")}" placeholder="Melt Shop"></label>
       <label class="f">Meter ID<input data-k="id" value="${esc(m.id || "")}" placeholder="eaf1"></label>
       <label class="f">Connection<select data-k="port">${Object.keys(cfg.ports).map(p => `<option ${m.port === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
@@ -484,8 +559,19 @@ async function viewSettings(preloaded) {
     const showFor = el => { const kind = $("[data-k=kind]", el).value; el.querySelectorAll("[data-for]").forEach(f => (f.hidden = !f.dataset.for.split(" ").includes(kind))); };
     v.querySelectorAll("[data-port]").forEach(el => { showFor(el); $("[data-k=kind]", el).onchange = () => showFor(el); });
     v.querySelectorAll("[data-meter]").forEach(el => {
-      const upd = () => { const m = readMeter(el); $("[data-pic]", el).innerHTML = machineIcon(guessMachine(m), 36); };
-      $("[data-k=machine]", el).onchange = upd; $("[data-k=name]", el).oninput = upd;
+      const upd = () => {
+        const m = readMeter(el);
+        $("[data-pic]", el).innerHTML = machinePic(liveMeter(m), 36);
+        $("[data-pick]", el).textContent = (m.machine && MACHINES[m.machine] ? MACHINES[m.machine].label : "Pick from the name");
+      };
+      $("[data-k=name]", el).oninput = upd;
+      $("[data-pick]", el).onclick = () => {
+        const m = readMeter(el), saved = S.meters.find(x => x.id === m.id && x.id);
+        pickMachine({ current: m.machine, name: m.name, title: `Picture for ${m.name || "this machine"}`,
+          meter: saved ? { ...saved, name: m.name || saved.name } : null,
+          onPick: key => { $("[data-k=machine]", el).value = key; if (saved) saved.picture_url = null; upd(); },
+          onUpload: url => { if (saved) saved.picture_url = url; upd(); } });
+      };
     });
     $("#sAddPort").onclick = () => { const n = $("#sNewPort").value.trim().replace(/\s+/g, "_"); if (!n) return toast("Type a name for the connection first."); if (!keep()) return; cfg.ports[n] = { kind: "rs485", serial_port: "", baudrate: 9600, parity: "N", stopbits: 1 }; redraw(); };
     v.querySelectorAll("[data-del-port]").forEach(b => (b.onclick = () => { if (!keep()) return; delete cfg.ports[b.dataset.delPort]; redraw(); }));

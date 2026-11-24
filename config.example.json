@@ -2,7 +2,11 @@
   "mode": "plant",
   "plant_id": "plant1",
   "plant_name": "Steel Plant - Unit 1",
-  "branding": {"company_name": "", "accent": "#ff7a1a", "theme": "dark"},
+  "branding": {
+    "company_name": "",
+    "accent": "#ff7a1a",
+    "theme": "dark"
+  },
   "timezone": "Asia/Kolkata",
   "poll_seconds": 5,
   "log_seconds": 60,
@@ -10,36 +14,232 @@
   "database": "data/energy.db",
   "listen_host": "0.0.0.0",
   "listen_port": 8080,
-
   "ports": {
-    "sim": {"kind": "simulator"},
-    "rs485_com3": {"kind": "rs485", "serial_port": "COM3", "baudrate": 9600, "parity": "N", "stopbits": 1, "timeout": 1.0},
-    "lan_meter_1": {"kind": "ethernet", "host": "192.168.1.50", "port": 502},
-    "gateway_smelter": {"kind": "gateway", "host": "192.168.1.60", "port": 502, "framing": "tcp"}
+    "sim": {
+      "kind": "simulator"
+    },
+    "rs485_com3": {
+      "kind": "rs485",
+      "serial_port": "COM3",
+      "baudrate": 9600,
+      "parity": "N",
+      "stopbits": 1,
+      "timeout": 1.0
+    },
+    "lan_meter_1": {
+      "kind": "ethernet",
+      "host": "192.168.1.50",
+      "port": 502
+    },
+    "gateway_smelter": {
+      "kind": "gateway",
+      "host": "192.168.1.60",
+      "port": 502,
+      "framing": "tcp"
+    }
   },
-
   "meters": [
-    {"id": "incomer", "machine": "transformer", "name": "33kV Main Incomer", "area": "Substation", "port": "sim", "contract_kva": 5000, "is_main": true,
-     "alarms": {"pf_min": 0.95, "kva_max": 4800}},
-    {"id": "eaf1", "machine": "induction_furnace", "name": "Induction Furnace 1", "area": "Melt Shop", "port": "sim", "contract_kva": 2000,
-     "alarms": {"pf_min": 0.9, "kva_max": 1900, "thd_v_max": 5}},
-    {"id": "eaf2", "machine": "induction_furnace", "name": "Induction Furnace 2", "area": "Melt Shop", "port": "sim", "contract_kva": 2000,
-     "alarms": {"pf_min": 0.9}},
-    {"id": "rolling", "machine": "rolling_mill", "name": "Rolling Mill", "area": "Mill", "port": "sim", "contract_kva": 1250,
-     "alarms": {"pf_min": 0.9}},
-    {"id": "ccm", "machine": "caster", "name": "Continuous Caster", "area": "Melt Shop", "port": "sim", "contract_kva": 800,
-     "alarms": {"pf_min": 0.9}},
-    {"id": "crane", "machine": "crane", "name": "EOT Cranes", "area": "Melt Shop", "port": "sim", "contract_kva": 300},
-    {"id": "compressor", "machine": "compressor", "name": "Air Compressors", "area": "Utilities", "port": "sim", "contract_kva": 500},
-
-    {"id": "rs485_example", "name": "Example RS485 meter", "area": "Mill", "port": "rs485_com3",
-     "unit_id": 1, "profile": "selec_mfm384", "enabled": false},
-    {"id": "lan_example", "name": "Example Ethernet meter", "area": "Utilities", "port": "lan_meter_1",
-     "unit_id": 1, "profile": "schneider_powerlogic_pm5000", "enabled": false},
-    {"id": "gateway_example", "name": "Example meter behind gateway", "area": "Melt Shop", "port": "gateway_smelter",
-     "unit_id": 3, "profile": "rishabh_rm3440", "enabled": false}
+    {
+      "id": "incomer",
+      "machine": "transformer",
+      "name": "33kV Main Incomer",
+      "area": "Substation",
+      "port": "sim",
+      "contract_kva": 5000,
+      "is_main": true,
+      "alarms": {
+        "pf_min": 0.9,
+        "kva_max": 4800
+      }
+    },
+    {
+      "port": "sim",
+      "id": "cgl",
+      "name": "CGL Line",
+      "area": "Coating",
+      "machine": "cgl_line",
+      "contract_kva": 1600,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 1520
+      }
+    },
+    {
+      "port": "sim",
+      "id": "galvalume",
+      "name": "Galvalume Line",
+      "area": "Coating",
+      "machine": "galvalume_line",
+      "contract_kva": 1600,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 1520
+      }
+    },
+    {
+      "port": "sim",
+      "id": "ccl",
+      "name": "CCL Line",
+      "area": "Coating",
+      "machine": "ccl_line",
+      "contract_kva": 1000,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 950
+      }
+    },
+    {
+      "port": "sim",
+      "id": "pickling",
+      "name": "Pickling Line",
+      "area": "Cold Mill",
+      "machine": "pickling_line",
+      "contract_kva": 800,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 760
+      }
+    },
+    {
+      "port": "sim",
+      "id": "hr_slitter",
+      "name": "HR Slitter",
+      "area": "Finishing",
+      "machine": "hr_slitter",
+      "contract_kva": 400,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 380
+      }
+    },
+    {
+      "port": "sim",
+      "id": "cr_slitter",
+      "name": "CR Slitter",
+      "area": "Finishing",
+      "machine": "cr_slitter",
+      "contract_kva": 315,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 299
+      }
+    },
+    {
+      "port": "sim",
+      "id": "trimming",
+      "name": "Trimming Line",
+      "area": "Finishing",
+      "machine": "trimming_line",
+      "contract_kva": 250,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 238
+      }
+    },
+    {
+      "port": "sim",
+      "id": "boiler",
+      "name": "Boiler",
+      "area": "Utilities",
+      "machine": "boiler",
+      "contract_kva": 300,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 285
+      }
+    },
+    {
+      "port": "sim",
+      "id": "etp",
+      "name": "ETP",
+      "area": "Utilities",
+      "machine": "etp",
+      "contract_kva": 160,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 152
+      }
+    },
+    {
+      "port": "sim",
+      "id": "ro",
+      "name": "RO Plant",
+      "area": "Utilities",
+      "machine": "ro_plant",
+      "contract_kva": 100,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 95
+      }
+    },
+    {
+      "port": "sim",
+      "id": "lpg",
+      "name": "LPG Yard",
+      "area": "Utilities",
+      "machine": "lpg_yard",
+      "contract_kva": 60,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 57
+      }
+    },
+    {
+      "port": "sim",
+      "id": "utility",
+      "name": "Utility",
+      "area": "Utilities",
+      "machine": "utility",
+      "contract_kva": 500,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 475
+      }
+    },
+    {
+      "port": "sim",
+      "id": "workshop",
+      "name": "Workshop",
+      "area": "Services",
+      "machine": "workshop",
+      "contract_kva": 100,
+      "alarms": {
+        "pf_min": 0.85,
+        "kva_max": 95
+      }
+    },
+    {
+      "id": "rs485_example",
+      "name": "Example RS485 meter",
+      "area": "Mill",
+      "port": "rs485_com3",
+      "unit_id": 1,
+      "profile": "selec_mfm384",
+      "enabled": false
+    },
+    {
+      "id": "lan_example",
+      "name": "Example Ethernet meter",
+      "area": "Utilities",
+      "port": "lan_meter_1",
+      "unit_id": 1,
+      "profile": "schneider_powerlogic_pm5000",
+      "enabled": false
+    },
+    {
+      "id": "gateway_example",
+      "name": "Example meter behind gateway",
+      "area": "Melt Shop",
+      "port": "gateway_smelter",
+      "unit_id": 3,
+      "profile": "rishabh_rm3440",
+      "enabled": false
+    }
   ],
-
-  "cloud_sync": {"url": "", "api_key": "", "sync_seconds": 30},
+  "cloud_sync": {
+    "url": "",
+    "api_key": "",
+    "sync_seconds": 30
+  },
   "profiles": {}
 }

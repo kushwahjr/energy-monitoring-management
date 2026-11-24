@@ -33,7 +33,7 @@ Needs Python 3.10 or newer.
 - **macOS**: double-click `start-mac.command` (first time: right-click, Open)
 - Or by hand: `pip install -r requirements.txt` then `python run.py`
 
-Open <http://localhost:8080>. Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
+Open <http://localhost:8080>. The demo plant has a 33 kV incomer with CGL, Galvalume, CCL, pickling, slitters, trimming line, boiler, ETP, RO, LPG yard, utility and workshop. Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
 To fill a week of demo history: `python tools/seed_demo.py --config config.json`.
 
 ## Your company's look
@@ -44,10 +44,30 @@ Settings → **Branding** (admin only):
 - **Company colour**: used for live power flow, charts and buttons. Red always stays for alarms.
 - **Screen**: dark (control room), light (office) or follow the device. Anyone can still flip it with the sun button.
 
-Settings → **Machines and meters**: pick a **picture** for each machine (transformer, induction furnace,
-arc furnace, ladle furnace, rolling mill, continuous caster, compressor, motor/pump, fan, EOT crane,
-DG set, capacitor bank, lighting, office, other) and whether it sits above the busbar as a **main incomer**
-or below it as a feeder. The Plant page draws the single-line diagram from this.
+### Machine names and pictures
+
+Every machine on the plant diagram has a name and a picture, and both can be changed at any time:
+
+- **On the machine's own page** (click it on the Plant diagram): press **Rename** to change its name or area,
+  or click the picture to change it. Logging carries on; nothing restarts.
+- **In Settings → Machines and meters**: the same, plus whether it sits above the busbar as a **main incomer**
+  or below it as a feeder.
+
+The picture picker has drawings of the machines found in steel plants, grouped and searchable:
+
+| Group | Pictures |
+|---|---|
+| Power | Transformer / incomer, DG set, capacitor bank / APFC |
+| Coating lines | CGL line (galvanizing), Galvalume line, CCL line (colour coating) |
+| Rolling and strip processing | Hot rolling mill, cold rolling mill (CRM), pickling line, annealing furnace |
+| Finishing | HR slitter, CR slitter, trimming line, cut-to-length line |
+| Utilities | Utility, boiler, LPG yard, ETP, RO plant, cooling tower, air compressor, pump, motor, fan / blower, oxygen / gas plant, fume extraction |
+| Melting and casting | Induction furnace, arc furnace, ladle furnace, continuous caster, reheating furnace |
+| Handling and buildings | EOT crane, workshop, lighting, office, other feeder |
+
+If none fits, choose **Upload a photo or drawing** (PNG, JPG, SVG or WebP under 1 MB; a square photo works best).
+Uploaded pictures are kept on the plant PC in `data/branding/machines/`. When no picture is chosen, one is picked
+from the machine's name (for example "HR Slitter 2" gets the HR slitter drawing).
 
 ## Connecting real meters
 

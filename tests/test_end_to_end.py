@@ -181,3 +181,31 @@ def test_branding_logo_and_machine_type(stack):
     ms = {m["id"]: m for m in httpx.get(p + "/api/meters").json()["meters"]}
     assert ms[cfg["meters"][0]["id"]]["machine"] == "arc_furnace"
     assert httpx.get(p + "/api/info").json()["branding"]["company_name"] == "Test Steel"  # settings save keeps branding
+
+
+def test_rename_machine_and_own_picture(stack):
+    import base64
+    p = stack["plant"]
+    mid = httpx.get(p + "/api/meters").json()["meters"][0]["id"]
+    m = httpx.patch(p + f"/api/machines/{mid}", json={"name": "CGL Line 2", "area": "Coating", "machine": "cgl_line"}).json()
+    assert (m["name"], m["area"], m["machine"]) == ("CGL Line 2", "Coating", "cgl_line")
+    assert httpx.patch(p + f"/api/machines/{mid}", json={"name": "  "}).status_code == 400
+    assert httpx.patch(p + "/api/machines/nope", json={"name": "x"}).status_code == 404
+    cfg = httpx.get(p + "/api/settings").json()["config"]
+    assert next(x for x in cfg["meters"] if x["id"] == mid)["name"] == "CGL Line 2"  # saved to config.json
+    png = base64.b64encode(bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+        "1f15c4890000000d49444154789c6360000002000005000155f5b0bb0000000049454e44ae426082")).decode()
+    url = httpx.post(p + f"/api/machines/{mid}/picture", json={"data_url": "data:image/png;base64," + png}).json()["picture_url"]
+    assert url.startswith("/branding/machines/")
+    r = httpx.get(p + url)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png" and "default-src 'none'" in r.headers["content-security-policy"]
+    assert next(x for x in httpx.get(p + "/api/meters").json()["meters"] if x["id"] == mid)["picture_url"] == url
+    assert httpx.post(p + f"/api/machines/{mid}/picture", json={"data_url": "data:text/html;base64,PGgxPg=="}).status_code == 400
+    assert httpx.get(p + "/branding/machines/..%2fconfig.json").status_code == 404
+    # a full settings save keeps the uploaded picture
+    assert httpx.put(p + "/api/settings", json={"config": cfg}).json()["ok"]
+    after = next(x for x in httpx.get(p + "/api/meters").json()["meters"] if x["id"] == mid)
+    assert after["picture_url"], (after, httpx.get(p + "/api/settings").json()["config"]["branding"])
+    assert httpx.post(p + f"/api/machines/{mid}/picture", json={"remove": True}).json()["picture_url"] is None
+    assert httpx.get(p + url).status_code == 404
