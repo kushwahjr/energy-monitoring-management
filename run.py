@@ -17,6 +17,19 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+def lan_ip() -> str:
+    """This PC's address on the plant network (no data is sent anywhere)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return "this-pc-ip"
+    finally:
+        s.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Energy Monitoring Management")
     ap.add_argument("command", nargs="?", default="serve", choices=["serve", "hash-password", "new-key"])
@@ -51,7 +64,11 @@ def main():
     app = create_app(cfg_path)
     host = args.host or cfg.listen_host
     port = args.port or cfg.listen_port
-    print(f"\n  Energy Monitoring Management ({cfg.mode} mode) on http://{'localhost' if host == '0.0.0.0' else host}:{port}\n")
+    print(f"\n  Energy Monitoring Management ({cfg.mode} mode) is running.")
+    print(f"  On this computer open:   http://localhost:{port}")
+    if host == "0.0.0.0":
+        print(f"  On phones and laptops:   http://{lan_ip()}:{port}   (same Wi-Fi / network)")
+    print("  Keep this window open. Close it to stop logging.\n")
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
