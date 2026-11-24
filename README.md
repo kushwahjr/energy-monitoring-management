@@ -34,7 +34,7 @@ Needs Python 3.10 or newer.
 - Or by hand: `pip install -r requirements.txt` then `python run.py`
 
 Open <http://localhost:8080>. The demo plant has a 33 kV incomer with CGL, Galvalume, CCL, pickling, slitters, trimming line, boiler, ETP, RO, LPG yard, utility and workshop. Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
-To fill a week of demo history: `python tools/seed_demo.py --config config.json`.
+To fill two weeks of demo history: `python tools/seed_demo.py --config config.json`.
 
 ## Your company's look
 
@@ -68,6 +68,27 @@ The picture picker has drawings of the machines found in steel plants, grouped a
 If none fits, choose **Upload a photo or drawing** (PNG, JPG, SVG or WebP under 1 MB; a square photo works best).
 Uploaded pictures are kept on the plant PC in `data/branding/machines/`. When no picture is chosen, one is picked
 from the machine's name (for example "HR Slitter 2" gets the HR slitter drawing).
+
+## Insights: analysis and advice
+
+The **Insights** page reads the last 7 full days of data and says what to fix, with a rough rupee value per month.
+It runs on the plant PC with no internet. It checks:
+
+- **Power factor** at the main incomer, the kVAr of capacitor bank needed to reach 0.99, and the lowest-PF feeders.
+  With kVAh billing it shows what the poor PF costs.
+- **Maximum demand** against contract demand: a warning near the limit, or a suggestion to lower the contract if it is far below.
+- **Idle running**: machines that stay on at under 15% of their normal load (lines stopped but drives, hydraulics or heaters left on).
+- **Peak hours**: flexible machines (slitters, trimming, ETP, RO, workshop, compressors, pumps) using energy in the peak tariff window.
+- **Trends**: machines using over 15% more energy than the week before, and unusual days.
+- **Electrical health**: current unbalance, voltage unbalance, voltage harmonics (THD) and voltage level.
+
+It also shows the plant load for each hour of the day against the peak window, and where the energy goes by machine.
+Set your tariff (kVAh or kWh billing, rates, demand charge, peak hours) at the bottom of the page so the money figures match your bill.
+
+**Ask Claude (optional).** An admin can paste a Claude API key (from console.anthropic.com) on the Insights page.
+Then anyone can ask questions in plain words, such as "how do I cut my maximum demand?". Each question sends this
+week's summary (daily totals, hourly averages and the findings, not raw readings) to Anthropic over the internet,
+and is billed to that API key. Leave the key empty to keep everything on the plant PC.
 
 ## Connecting real meters
 

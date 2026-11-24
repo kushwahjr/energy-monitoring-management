@@ -1,6 +1,9 @@
-"""Fill the database with 7 days of simulated history, so reports and charts have something to show.
+"""Fill the database with simulated history, so reports, charts and Insights have something to show.
 
-  python tools/seed_demo.py --config config.json --days 7
+  python tools/seed_demo.py --config config.json --days 14
+
+A few demo machines get habits for Insights to find: slitters and pickling idle at night instead of
+switching off, the CCL line uses more energy this week, and the workshop has an unbalanced phase.
 """
 
 import argparse
@@ -16,7 +19,7 @@ import time  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--config", default="config.json")
-ap.add_argument("--days", type=int, default=7)
+ap.add_argument("--days", type=int, default=14)
 a = ap.parse_args()
 cfg = load_config(a.config)
 db = Database(cfg.database)
@@ -37,6 +40,10 @@ for m in cfg.meters:
         hour = (ts / 3600 + 5.5) % 24
         shift = 0.35 if 2 <= hour < 6 else 1.0  # lighter load at night
         load = max(0.03, shift * (0.55 + 0.3 * math.sin(ts / 1500 + rnd.random())) + rnd.uniform(-0.07, 0.07))
+        if m.machine in ("hr_slitter", "cr_slitter", "pickling_line") and (hour >= 22 or hour < 6):
+            load = rnd.uniform(0.06, 0.10)  # line stopped, drives and hydraulics left running
+        if m.machine == "ccl_line" and ts > now - 6 * 86400:
+            load *= 1.25  # this week's extra use
         kva = load * rated * 0.95
         pf = min(0.999, pf0 + rnd.uniform(-0.03, 0.03))
         kw = kva * pf
@@ -45,7 +52,7 @@ for m in cfg.meters:
         v = 239 + rnd.uniform(-4, 4)
         i = kva * 1000 / (3 * v)
         rows.append({"ts": ts, "meter_id": m.id, "v_ln": v, "v_ll": v * 1.732, "v1": v, "v2": v + 1, "v3": v - 1,
-                     "i_avg": i, "i1": i, "i2": i * 1.02, "i3": i * 0.98, "kw": kw, "kva": kva, "kvar": kvar, "pf": pf,
+                     "i_avg": i, "i1": i * (1.16 if m.machine == "workshop" else 1), "i2": i * 1.02, "i3": i * 0.98, "kw": kw, "kva": kva, "kvar": kvar, "pf": pf,
                      "hz": 50 + rnd.uniform(-0.05, 0.05), "kwh": kwh, "kvah": kvah, "kvarh": kvarh,
                      "thd_v": rnd.uniform(2, 5), "thd_i": rnd.uniform(8, 20)})
     # end exactly where the live simulator starts, so the energy register is continuous

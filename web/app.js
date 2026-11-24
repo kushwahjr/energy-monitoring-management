@@ -93,7 +93,7 @@ function route() {
   const [name, arg] = location.hash.replace(/^#\/?/, "").split("/");
   S.route = name || "overview";
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.route === (S.route === "meter" ? "overview" : S.route)));
-  const views = { overview: viewOverview, meter: () => viewMeter(decodeURIComponent(arg || "")), reports: viewReports, events: viewEvents, settings: () => viewSettings() };
+  const views = { overview: viewOverview, meter: () => viewMeter(decodeURIComponent(arg || "")), reports: viewReports, insights: viewInsights, events: viewEvents, settings: () => viewSettings() };
   (views[S.route] || viewOverview)();
   window.scrollTo(0, 0);
 }
@@ -309,6 +309,128 @@ function pickMachine(opts) {
     const r = new FileReader(); r.onload = () => own({ data_url: r.result }); r.readAsDataURL(f);
   };
   if (matchMedia("(pointer: fine)").matches) setTimeout(() => $("#pkFind").focus(), 0); // no pop-up keyboard on phones
+}
+
+// ---------------- insights (analysis and advice) ----------------
+const SEV = { high: ["bad", "Act now"], medium: ["warn", "Worth fixing"], low: ["info", "Opportunity"], good: ["ok", "Good"] };
+
+// Small, safe Markdown subset for Claude's answers: paragraphs, bullet lists, **bold**.
+function mdLite(t) {
+  const lines = esc(t).split(/\n/);
+  let html = "", list = false;
+  for (const raw of lines) {
+    const l = raw.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+    const m = l.match(/^\s*(?:[-*•]|\d+\.)\s+(.*)/);
+    if (m) { if (!list) { html += "<ul>"; list = true; } html += `<li>${m[1]}</li>`; continue; }
+    if (list) { html += "</ul>"; list = false; }
+    if (l.trim()) html += `<p>${l.replace(/^#+\s*/, "")}</p>`;
+  }
+  return html + (list ? "</ul>" : "");
+}
+
+async function viewInsights() {
+  const v = $("#view");
+  const admin = S.info.user && S.info.user.role === "admin";
+  v.innerHTML = `<h1>Insights</h1><p class="lede">What the last 7 days of meter data say, and what to do about it. Updated every few minutes.</p><div id="iBody"><p class="muted">Analysing…</p></div>`;
+  let a;
+  try { a = await api("/api/insights"); } catch (e) { $("#iBody").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  if (!S.meters.length) { try { S.meters = (await api("/api/meters")).meters; } catch (_) {} }
+  const t = a.tariff, cur = t.currency, sm = a.summary;
+  const byName = Object.fromEntries(S.meters.map(m => [m.name, m]));
+  const money = x => x == null ? "" : cur + Math.round(x).toLocaleString("en-IN");
+  const todo = a.insights.filter(x => x.severity !== "good"), good = a.insights.filter(x => x.severity === "good");
+  const feeders = a.machines.filter(m => !m.main_incomer && m.kwh_per_day);
+  const fTotal = feeders.reduce((s, m) => s + m.kwh_per_day, 0) || 1;
+  const main = a.machines.find(m => m.main_incomer && m.hourly_avg_kw) || a.machines.find(m => m.hourly_avg_kw);
+  const inPeak = h => (t.peak_hours || []).some(([x, y]) => x <= y ? h >= x && h < y : h >= x || h < y);
+  const hours = main ? Array.from({ length: 24 }, (_, h) => main.hourly_avg_kw[h] ?? null) : [];
+  const hMax = Math.max(1, ...hours.filter(x => x != null));
+  const asks = ["Which machine should I fix first, and why?", "How can I cut my maximum demand?", "Is the CGL line using more energy than it should?", "Make a 30-day energy saving plan for my team"];
+
+  const card = x => {
+    const m = byName[x.meter_name];
+    return `<article class="insight sev-${SEV[x.severity][0]}">
+      <div class="ins-pic">${m ? machinePic(m, 44) : machineIcon(x.machine || "feeder", 44)}</div>
+      <div class="ins-main"><div class="row ins-tags"><span class="badge ${SEV[x.severity][0]}">${SEV[x.severity][1]}</span><span class="hint">${esc(x.category)}${x.meter_name ? " · " + esc(x.meter_name) : ""}</span></div>
+        <h3>${esc(x.title)}</h3><p>${esc(x.detail)}</p>
+        <p class="ins-do"><b>What to do:</b> ${esc(x.action)}</p></div>
+      ${x.saving_month ? `<div class="ins-save"><small>Worth about</small><b>${money(x.saving_month)}</b><small>a month</small></div>` : ""}
+    </article>`;
+  };
+
+  $("#iBody").innerHTML = `
+    <section class="readouts ins-sum">
+      <div class="readout"><div class="k">Possible saving</div><div class="v accent">${esc(sm.possible_saving_text || money(0))}</div><div class="s">a month, if all the advice below is followed</div></div>
+      <div class="readout"><div class="k">Things to fix</div><div class="v">${sm.findings}</div><div class="s">${todo.filter(x => x.severity === "high").length} need action now</div></div>
+      <div class="readout"><div class="k">Energy per day</div><div class="v">${fmtNum(sm.kwh_per_day, 0)}<small>kWh</small></div><div class="s">average, ${esc(a.period.from)} to ${esc(a.period.to)}</div></div>
+      <div class="readout"><div class="k">Energy cost per day</div><div class="v">${money(sm.cost_per_day)}</div><div class="s">at ${cur}${t.energy_rate} per ${t.billing === "kvah" ? "kVAh" : "kWh"}</div></div>
+    </section>
+
+    <section class="panel ask">
+      <div class="row"><h2 style="margin:0">Ask Claude about your plant</h2>${a.ai_enabled ? `<span class="badge ok">On</span>` : `<span class="badge">Off</span>`}</div>
+      ${a.ai_enabled ? `<p class="hint">Claude reads this week's numbers for every machine (daily totals and hourly averages, not raw readings) and answers in plain words.</p>
+        <div class="chips">${asks.map(q => `<button class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+        <form id="askForm" class="row ask-row"><input id="askQ" placeholder="Ask anything, e.g. why did energy go up on Tuesday?" maxlength="1000" aria-label="Question"><button class="primary" id="askBtn">Ask</button></form>
+        <div id="askOut"></div>`
+      : `<p class="hint">The advice on this page works offline. Switch on Claude to also ask questions in your own words, like "how do I cut my maximum demand?". It needs an internet connection and a Claude API key from console.anthropic.com; this week's summary numbers are sent with each question.</p>
+        ${admin ? `<form id="aiForm" class="row ask-row"><input id="aiKey" type="password" placeholder="Paste Claude API key (sk-ant-…)" autocomplete="off" aria-label="Claude API key"><button class="primary">Switch on</button></form>` : `<p class="hint">Ask an admin to switch it on.</p>`}`}
+    </section>
+
+    <h2>Advice</h2>
+    ${todo.length ? todo.map(card).join("") : `<p class="panel pad">No problems found in the last 7 days. Good work.</p>`}
+
+    <div class="ins-grid">
+      ${main ? `<section class="panel"><h2 style="margin-top:0">Plant load by hour</h2><p class="hint">Average kW at ${esc(main.name)} for each hour of the day. Shaded hours are the peak tariff window.</p>
+        <div class="hbars">${hours.map((x, h) => `<div class="hb ${inPeak(h) ? "peak" : ""}" title="${h}:00, ${fmtNum(x, 0)} kW"><i style="height:${x == null ? 0 : Math.max(2, x / hMax * 100)}%"></i><span>${h % 3 === 0 ? h : ""}</span></div>`).join("")}</div></section>` : ""}
+      ${feeders.length ? `<section class="panel"><h2 style="margin-top:0">Where the energy goes</h2><p class="hint">Share of daily kWh by machine, this week.</p>
+        <div class="share">${feeders.sort((x, y) => y.kwh_per_day - x.kwh_per_day).map(m => {
+          const ch = m.kwh_per_day_prev_week ? (m.kwh_per_day - m.kwh_per_day_prev_week) / m.kwh_per_day_prev_week * 100 : null;
+          return `<div class="sh"><span>${esc(m.name)}</span><div class="bar"><i style="width:${m.kwh_per_day / fTotal * 100}%"></i></div><b>${fmtNum(m.kwh_per_day, 0)}</b><small class="${ch > 10 ? "up" : ""}">${ch == null ? "" : (ch > 0 ? "+" : "") + ch.toFixed(0) + "%"}</small></div>`;
+        }).join("")}</div></section>` : ""}
+    </div>
+
+    ${good.length ? `<h2>Going well</h2>${good.map(card).join("")}` : ""}
+
+    ${admin ? `<details class="panel tariff"><summary><b>Your tariff</b> <span class="hint">(used for the money figures)</span></summary>
+      <div class="form" style="margin-top:12px">
+        <label class="f">Billed on<select id="tBill"><option value="kvah" ${t.billing === "kvah" ? "selected" : ""}>kVAh</option><option value="kwh" ${t.billing === "kwh" ? "selected" : ""}>kWh</option></select></label>
+        <label class="f">Energy rate (${esc(cur)} per unit)<input id="tRate" type="number" step="0.01" value="${t.energy_rate}"></label>
+        <label class="f">Demand charge (${esc(cur)} per kVA a month)<input id="tDem" type="number" step="1" value="${t.demand_rate}"></label>
+        <label class="f">Target power factor<input id="tPf" type="number" step="0.01" min="0.8" max="1" value="${t.pf_target}"></label>
+        <label class="f">Peak hours (e.g. 18-22, 6-9)<input id="tPeak" value="${esc((t.peak_hours || []).map(p => p.join("-")).join(", "))}"></label>
+        <label class="f">Peak surcharge (${esc(cur)} per unit)<input id="tExtra" type="number" step="0.01" value="${t.peak_extra}"></label>
+        <label class="f">Currency symbol<input id="tCur" value="${esc(cur)}" maxlength="4"></label>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="primary" id="tSave">Save tariff</button>${a.ai_enabled ? `<div class="spacer"></div><button class="ghost danger" id="aiOff">Switch off Claude</button>` : ""}</div>
+    </details>` : ""}`;
+
+  const ask = async q => {
+    if (!q.trim()) return;
+    $("#askQ").value = q; $("#askBtn").disabled = true;
+    $("#askOut").innerHTML = `<div class="answer"><p class="muted">Claude is reading your plant data…</p></div>`;
+    try { const r = await api("/api/insights/ask", { method: "POST", body: JSON.stringify({ question: q }) }); $("#askOut").innerHTML = `<div class="answer"><div class="q">${esc(q)}</div>${mdLite(r.answer)}<p class="hint">Check figures against the meters before acting on them.</p></div>`; }
+    catch (e) { $("#askOut").innerHTML = `<div class="answer"><p class="err">${esc(e.message)}</p></div>`; }
+    $("#askBtn").disabled = false;
+  };
+  if ($("#askForm")) {
+    $("#askForm").onsubmit = e => { e.preventDefault(); ask($("#askQ").value); };
+    v.querySelectorAll("[data-q]").forEach(b => (b.onclick = () => ask(b.dataset.q)));
+  }
+  if ($("#aiForm")) $("#aiForm").onsubmit = async e => {
+    e.preventDefault();
+    const k = $("#aiKey").value.trim(); if (!k) return toast("Paste the API key first.");
+    try { await api("/api/ai", { method: "PUT", body: JSON.stringify({ api_key: k }) }); toast("Claude switched on."); refreshInfo(); viewInsights(); } catch (err) { toast(err.message); }
+  };
+  if ($("#aiOff")) $("#aiOff").onclick = async () => { await api("/api/ai", { method: "PUT", body: JSON.stringify({ api_key: "" }) }); toast("Claude switched off."); viewInsights(); };
+  if ($("#tSave")) $("#tSave").onclick = async () => {
+    const peak = $("#tPeak").value.split(",").map(x => x.trim()).filter(Boolean).map(x => x.split("-").map(Number));
+    if (peak.some(p => p.length !== 2 || p.some(isNaN))) return toast("Write peak hours like 18-22, or 6-9, 18-22.");
+    try {
+      await api("/api/tariff", { method: "PUT", body: JSON.stringify({ billing: $("#tBill").value, energy_rate: $("#tRate").value, demand_rate: $("#tDem").value,
+        pf_target: $("#tPf").value, peak_hours: peak, peak_extra: $("#tExtra").value, currency: $("#tCur").value }) });
+      toast("Tariff saved."); viewInsights();
+    } catch (err) { toast(err.message); }
+  };
 }
 
 // ---------------- reports ----------------

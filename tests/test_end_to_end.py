@@ -209,3 +209,24 @@ def test_rename_machine_and_own_picture(stack):
     assert after["picture_url"], (after, httpx.get(p + "/api/settings").json()["config"]["branding"])
     assert httpx.post(p + f"/api/machines/{mid}/picture", json={"remove": True}).json()["picture_url"] is None
     assert httpx.get(p + url).status_code == 404
+
+
+def test_insights_api_and_tariff(stack):
+    p = stack["plant"]
+    a = httpx.get(p + "/api/insights").json()
+    assert {"summary", "insights", "machines", "tariff"} <= a.keys() and a["ai_enabled"] is False
+    t = httpx.put(p + "/api/tariff", json={"energy_rate": 8.2, "billing": "kwh", "peak_hours": [[18, 22]]}).json()
+    assert t["energy_rate"] == 8.2 and t["billing"] == "kwh"
+    assert httpx.put(p + "/api/tariff", json={"billing": "both"}).status_code == 400
+    assert httpx.put(p + "/api/tariff", json={"pf_target": 1.5}).status_code == 400
+    assert httpx.get(p + "/api/insights?fresh=true").json()["tariff"]["energy_rate"] == 8.2
+    r = httpx.post(p + "/api/insights/ask", json={"question": "What should I fix?"})
+    assert r.status_code == 400 and "API key" in r.json()["detail"]
+    assert httpx.put(p + "/api/ai", json={"api_key": "sk-ant-x"}).json()["ai_enabled"]
+    cfg = httpx.get(p + "/api/settings").json()["config"]
+    assert cfg["ai"]["api_key"] == "********"
+    # a settings save keeps tariff and key
+    assert httpx.put(p + "/api/settings", json={"config": cfg}).json()["ok"]
+    assert httpx.get(p + "/api/info").json()["ai_enabled"]
+    assert httpx.get(p + "/api/insights").json()["tariff"]["energy_rate"] == 8.2
+    assert httpx.put(p + "/api/ai", json={"api_key": ""}).json()["ai_enabled"] is False

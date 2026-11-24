@@ -26,6 +26,7 @@ from .collector import Collector, check_alarms
 from .config import Alarms, Config, ConfigError, Meter, library_profiles, parse_config
 from .db import Database
 from .params import PARAM_KEYS, PARAMS
+from .insights import analyse, ask_claude, tariff_from
 from .reports import daily_report, day_range
 from .sync import CloudSyncer
 
@@ -179,6 +180,7 @@ def create_app(config_path: str | Path) -> FastAPI:
             "poll_seconds": cfg.poll_seconds, "log_seconds": cfg.log_seconds,
             "timezone": str(state.tz), "cloud_sync": state.syncer.status if state.syncer else None,
             "branding": branding_public(),
+            "ai_enabled": bool(state.raw.get("ai", {}).get("api_key")),
         }
 
     # ---------- branding (company name, logo, colours) ----------
@@ -318,6 +320,90 @@ def create_app(config_path: str | Path) -> FastAPI:
             raise HTTPException(404)
         return image_response(branding_dir() / logo)
 
+    # ---------- insights and AI advice ----------
+    insight_cache: dict = {}
+
+    def insight_meters() -> list[dict]:
+        if state.config.mode == "plant":
+            return [{"id": m.id, "name": m.name, "area": m.area, "is_main": m.is_main, "contract_kva": m.contract_kva,
+                     "machine": m.machine} for m in state.config.meters if m.enabled]
+        return [{"id": m["id"], "name": m["name"], "area": m["area"], "is_main": bool(m["is_main"]),
+                 "contract_kva": m["contract_kva"], "machine": m["machine"]} for m in state.db.meters()]
+
+    async def current_analysis(fresh: bool = False) -> dict:
+        import asyncio
+        key = json.dumps([state.raw.get("tariff"), [m["name"] for m in insight_meters()]], sort_keys=True)
+        hit = insight_cache.get("a")
+        if not fresh and hit and hit[0] == key and time.time() - hit[1] < 300:
+            return hit[2]
+        a = await asyncio.to_thread(analyse, insight_meters(), state.db, state.tz, state.raw.get("tariff"),
+                                    state.config.demand_block_minutes)
+        insight_cache["a"] = (key, time.time(), a)
+        return a
+
+    @api.get("/api/insights")
+    async def insights(fresh: bool = False, _=Depends(need_user)):
+        return {**await current_analysis(fresh), "ai_enabled": bool(state.raw.get("ai", {}).get("api_key"))}
+
+    @api.put("/api/tariff")
+    async def put_tariff(body: dict, _=Depends(need_admin)):
+        t = tariff_from(state.raw.get("tariff"))
+        try:
+            for k in ("energy_rate", "demand_rate", "pf_target", "peak_extra"):
+                if k in body:
+                    t[k] = float(body[k])
+                    if t[k] < 0 or (k == "pf_target" and not 0.8 <= t[k] <= 1):
+                        raise ValueError(k)
+            if "billing" in body:
+                if body["billing"] not in ("kvah", "kwh"):
+                    raise ValueError("billing")
+                t["billing"] = body["billing"]
+            if "currency" in body:
+                t["currency"] = str(body["currency"])[:4]
+            if "peak_hours" in body:
+                ph = [[int(a), int(b)] for a, b in body["peak_hours"]]
+                if any(not (0 <= a <= 23 and 0 <= b <= 24) for a, b in ph):
+                    raise ValueError("peak_hours")
+                t["peak_hours"] = ph
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"Check the value of {e}")
+        state.raw["tariff"] = t
+        save_raw()
+        insight_cache.clear()
+        return t
+
+    @api.put("/api/ai")
+    async def put_ai(body: dict, _=Depends(need_admin)):
+        ai = dict(state.raw.get("ai", {}))
+        if "api_key" in body and body["api_key"] != "********":
+            ai["api_key"] = str(body["api_key"]).strip()
+        if body.get("model"):
+            ai["model"] = str(body["model"]).strip()[:60]
+        state.raw["ai"] = ai
+        save_raw()
+        return {"ai_enabled": bool(ai.get("api_key")), "model": ai.get("model", "claude-opus-5-5")}
+
+    @api.post("/api/insights/ask")
+    async def ask(body: dict, _=Depends(need_user)):
+        import asyncio
+        ai = state.raw.get("ai", {})
+        if not ai.get("api_key"):
+            raise HTTPException(400, "Claude is not switched on. An admin can add an API key on the Insights page.")
+        q = str(body.get("question", "")).strip()[:1000]
+        if not q:
+            raise HTTPException(400, "Type a question first")
+        a = await current_analysis()
+        try:
+            answer = await asyncio.to_thread(ask_claude, ai["api_key"], ai.get("model") or "claude-opus-5-5", a, q,
+                                             state.raw.get("plant_name", ""))
+        except ImportError:
+            raise HTTPException(500, "The Claude library is missing. Run: pip install anthropic")
+        except Exception as e:  # network, key, rate limit: show the reason to the user
+            log.warning("Claude request failed: %s", e)
+            msg = getattr(e, "message", None) or str(e)
+            raise HTTPException(502, f"Claude could not be reached: {msg[:300]}")
+        return {"answer": answer}
+
     # ---------- live data and history ----------
     @api.get("/api/meters")
     async def meters(_=Depends(need_user)):
@@ -420,6 +506,8 @@ def create_app(config_path: str | Path) -> FastAPI:
         if raw.get("cloud_sync", {}).get("api_key"):
             raw["cloud_sync"]["api_key"] = "********"
         raw.pop("secret_key", None)
+        if raw.get("ai", {}).get("api_key"):
+            raw["ai"]["api_key"] = "********"
         return {"config": raw, "library_profiles": library_profiles()}
 
     @api.put("/api/settings")
@@ -436,6 +524,11 @@ def create_app(config_path: str | Path) -> FastAPI:
             raw["secret_key"] = state.raw["secret_key"]
         raw["users"] = state.raw.get("users", [])  # users are managed in config.json only
         raw["branding"] = state.raw.get("branding", {})  # managed on the Branding tab
+        for k in ("tariff", "ai"):  # managed on the Insights page
+            if k in state.raw:
+                raw[k] = state.raw[k]
+            else:
+                raw.pop(k, None)
         try:
             await state.apply_settings(raw)
         except ConfigError as e:
