@@ -1,0 +1,89 @@
+{
+  "brand": "Schneider Electric",
+  "models": [
+    "PM5300 series (PM5310, PM5320, PM5330, PM5340, PM5350)",
+    "PM5100 series",
+    "PM2100 series",
+    "EM6400NG / EM6400NG+"
+  ],
+  "status": "third_party",
+  "source": "Schneider PM5350 register list (Appendix D, 63230-401-203Z7, draft 2010) and modbusmanager.com (third party); both agree. Not yet checked against Schneider's current register list for each model.",
+  "notes": "Register numbers in Schneider manuals start at 1, so address_offset is -1. PF uses Schneider's 4-quadrant format, decoded automatically. Energy is INT64 in Wh, converted to kWh. PM5100, PM2100 and EM6400NG are expected to share this PowerLogic map but were not checked one by one, but check THD and energy registers with Test reading.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": -1,
+  "registers": {
+    "i1": {
+      "address": 3000,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 3002,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 3004,
+      "type": "float32"
+    },
+    "i_avg": {
+      "address": 3010,
+      "type": "float32"
+    },
+    "v_ll": {
+      "address": 3026,
+      "type": "float32"
+    },
+    "v1": {
+      "address": 3028,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 3030,
+      "type": "float32"
+    },
+    "v3": {
+      "address": 3032,
+      "type": "float32"
+    },
+    "v_ln": {
+      "address": 3036,
+      "type": "float32"
+    },
+    "kw": {
+      "address": 3060,
+      "type": "float32"
+    },
+    "kvar": {
+      "address": 3068,
+      "type": "float32"
+    },
+    "kva": {
+      "address": 3076,
+      "type": "float32"
+    },
+    "pf": {
+      "address": 3084,
+      "type": "float32",
+      "transform": "pf_4q"
+    },
+    "hz": {
+      "address": 3110,
+      "type": "float32"
+    },
+    "kwh": {
+      "address": 3204,
+      "type": "int64",
+      "scale": 0.001
+    },
+    "kvarh": {
+      "address": 3220,
+      "type": "int64",
+      "scale": 0.001
+    },
+    "kvah": {
+      "address": 3236,
+      "type": "int64",
+      "scale": 0.001
+    }
+  }
+}

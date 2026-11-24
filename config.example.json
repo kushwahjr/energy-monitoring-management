@@ -12,7 +12,7 @@
 
   "ports": {
     "sim": {"kind": "simulator"},
-    "rs485_com3": {"kind": "rs485", "serial_port": "COM3", "baudrate": 9600, "parity": "E", "stopbits": 1, "timeout": 1.0},
+    "rs485_com3": {"kind": "rs485", "serial_port": "COM3", "baudrate": 9600, "parity": "N", "stopbits": 1, "timeout": 1.0},
     "lan_meter_1": {"kind": "ethernet", "host": "192.168.1.50", "port": 502},
     "gateway_smelter": {"kind": "gateway", "host": "192.168.1.60", "port": 502, "framing": "tcp"}
   },
@@ -29,11 +29,11 @@
     {"id": "compressor", "name": "Air Compressors", "area": "Utilities", "port": "sim", "contract_kva": 500},
 
     {"id": "rs485_example", "name": "Example RS485 meter", "area": "Mill", "port": "rs485_com3",
-     "unit_id": 1, "profile": "generic_float32_template", "enabled": false},
+     "unit_id": 1, "profile": "selec_mfm384", "enabled": false},
     {"id": "lan_example", "name": "Example Ethernet meter", "area": "Utilities", "port": "lan_meter_1",
-     "unit_id": 1, "profile": "generic_float32_template", "enabled": false},
+     "unit_id": 1, "profile": "schneider_powerlogic_pm5000", "enabled": false},
     {"id": "gateway_example", "name": "Example meter behind gateway", "area": "Melt Shop", "port": "gateway_smelter",
-     "unit_id": 3, "profile": "generic_int16_scaled_template", "enabled": false}
+     "unit_id": 3, "profile": "rishabh_rm3440", "enabled": false}
   ],
 
   "cloud_sync": {"url": "", "api_key": "", "sync_seconds": 30},

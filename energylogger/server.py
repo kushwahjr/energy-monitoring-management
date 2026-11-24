@@ -120,7 +120,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         yield
         await state.stop()
 
-    api = FastAPI(title="Steel Energy Logger", lifespan=lifespan)
+    api = FastAPI(title="Energy Monitoring Management", lifespan=lifespan)
     api.state.app = state
 
     # ---------- login ----------
@@ -313,9 +313,24 @@ def create_app(config_path: str | Path) -> FastAPI:
                 # share the live port lock so a test does not collide with polling on RS485
                 live = state.collector.port_readers.get(m.port) if state.collector else None
                 reader = live if live and dataclasses.asdict(live.port) == dataclasses.asdict(port) else tmp.port_readers[m.port]
-                values = await reader.read(m, cfg.profiles[m.profile])
+                prof = cfg.profiles[m.profile]
+                values = await reader.read(m, prof)
+                hint = None
+                # Many manuals do not say which 16-bit word comes first. Frequency must be 45-65 Hz,
+                # so if it is not, try the other order and tell the technician which one works.
+                if "hz" in {r.param for r in prof.registers} and not 45 <= values.get("hz", 0) <= 65:
+                    other = "little" if prof.word_order == "big" else "big"
+                    alt = await reader.read(m, dataclasses.replace(prof, word_order=other))
+                    if 45 <= alt.get("hz", 0) <= 65:
+                        values = alt
+                        hint = (f"Readings only make sense with word order '{other}'. Add \"word_order\": \"{other}\" "
+                                f"to the '{m.profile}' model, or copy it under a new name with that change.")
+                    else:
+                        hint = ("Frequency does not read as 45-65 Hz in either word order. Check the Modbus address, "
+                                "the register map for this model, and the 1-based/0-based address setting.")
                 if reader is not live:
                     await reader.close()
+                return {"ok": True, "values": values, "hint": hint}
         except Exception as e:
             return {"ok": False, "error": str(e) or type(e).__name__}
         return {"ok": True, "values": values}

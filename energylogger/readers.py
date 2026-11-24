@@ -34,6 +34,23 @@ def plan_blocks(profile: Profile, gap: int = 6) -> list[tuple[int, int, list[Reg
     return blocks
 
 
+def derive_missing(v: dict[str, float]) -> dict[str, float]:
+    """Fill averages and totals that a meter model does not provide, from the values it does."""
+    phases_v = [v[k] for k in ("v1", "v2", "v3") if k in v]
+    phases_i = [v[k] for k in ("i1", "i2", "i3") if k in v]
+    if "v_ln" not in v and len(phases_v) == 3:
+        v["v_ln"] = sum(phases_v) / 3
+    if "v_ll" not in v and "v_ln" in v:
+        v["v_ll"] = v["v_ln"] * math.sqrt(3)  # balanced-system estimate
+    if "i_avg" not in v and len(phases_i) == 3:
+        v["i_avg"] = sum(phases_i) / 3
+    if "kva" not in v and "kw" in v and "kvar" in v:
+        v["kva"] = math.hypot(v["kw"], v["kvar"])
+    if "pf" not in v and "kw" in v and v.get("kva"):
+        v["pf"] = v["kw"] / v["kva"]
+    return v
+
+
 class ModbusPortReader:
     """One connection (TCP host or serial port), shared by all meters on it.
 
@@ -76,25 +93,44 @@ class ModbusPortReader:
 
         async with self.lock:
             await self._ensure()
-            values: dict[str, float] = {}
-            for start, count, regs in plan_blocks(profile):
-                fn = self.client.read_holding_registers if profile.register_type == "holding" else self.client.read_input_registers
+            fn = self.client.read_holding_registers if profile.register_type == "holding" else self.client.read_input_registers
+
+            async def fetch(start: int, count: int):
                 try:
-                    rr = await fn(start, count=count, device_id=meter.unit_id)
+                    return await fn(start, count=count, device_id=meter.unit_id)
                 except Exception as e:  # timeouts, broken connection
                     self.client.close()
                     raise ReadError(f"{meter.id}: {e}") from e
+
+            def decode(r: Register, words) -> None:
+                dtype = getattr(ModbusBaseClient.DATATYPE, r.type.upper())
+                v = float(ModbusBaseClient.convert_from_registers(words, dtype, word_order=profile.word_order))
+                if r.transform == "pf_4q" and abs(v) > 1:
+                    v = (2 - v) if v > 0 else (-2 - v)
+                v *= r.scale
+                if math.isfinite(v):
+                    values[r.param] = v
+
+            values: dict[str, float] = {}
+            for start, count, regs in plan_blocks(profile):
+                rr = await fetch(start, count)
                 if rr.isError():
-                    raise ReadError(f"{meter.id}: Modbus error at {start} ({rr})")
+                    if len(regs) == 1:
+                        raise ReadError(f"{meter.id}: Modbus error at {start} ({rr})")
+                    # Some meters refuse a block that spans reserved registers: read one by one instead.
+                    ok = 0
+                    for r in regs:
+                        one = await fetch(r.address + profile.address_offset, r.length)
+                        if not one.isError():
+                            decode(r, one.registers)
+                            ok += 1
+                    if ok == 0:
+                        raise ReadError(f"{meter.id}: Modbus error at {start} ({rr})")
+                    continue
                 for r in regs:
                     off = r.address + profile.address_offset - start
-                    words = rr.registers[off: off + r.length]
-                    dtype = getattr(ModbusBaseClient.DATATYPE, r.type.upper())
-                    v = ModbusBaseClient.convert_from_registers(words, dtype, word_order=profile.word_order)
-                    v = float(v) * r.scale
-                    if math.isfinite(v):
-                        values[r.param] = v
-            return values
+                    decode(r, rr.registers[off: off + r.length])
+            return derive_missing(values)
 
     async def close(self):
         if self.client is not None:

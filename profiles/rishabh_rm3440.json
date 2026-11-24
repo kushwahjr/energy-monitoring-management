@@ -1,0 +1,93 @@
+{
+  "brand": "Rishabh",
+  "models": [
+    "Rish Master 3440",
+    "Rish Master 3440i"
+  ],
+  "status": "manufacturer_partly_checked",
+  "source": "Rishabh RM3440 manual DMAN-00IM-0711 Rev C (register table partly legible), cross-checked with AGG Software's list; they agree.",
+  "notes": "Input registers 30001+ (wire address = listed - 30001). Power in W/VA/var and energy in Wh are converted to kW/kWh, assuming the meter's energy resolution setting (register 46005) is Wh: compare kWh with the meter display once. kVArh is the inductive counter. Rish Master 3430 was not found in Rishabh documents: try this model and confirm with Test reading.",
+  "register_type": "input",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "v1": {
+      "address": 0,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 2,
+      "type": "float32"
+    },
+    "v3": {
+      "address": 4,
+      "type": "float32"
+    },
+    "i1": {
+      "address": 6,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 8,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 10,
+      "type": "float32"
+    },
+    "v_ln": {
+      "address": 42,
+      "type": "float32"
+    },
+    "i_avg": {
+      "address": 46,
+      "type": "float32"
+    },
+    "kw": {
+      "address": 52,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kva": {
+      "address": 56,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kvar": {
+      "address": 60,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "pf": {
+      "address": 64,
+      "type": "float32"
+    },
+    "hz": {
+      "address": 70,
+      "type": "float32"
+    },
+    "kwh": {
+      "address": 72,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kvarh": {
+      "address": 78,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kvah": {
+      "address": 80,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "thd_v": {
+      "address": 218,
+      "type": "float32"
+    },
+    "thd_i": {
+      "address": 220,
+      "type": "float32"
+    }
+  }
+}

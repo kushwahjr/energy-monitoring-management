@@ -1,0 +1,61 @@
+{
+  "brand": "Siemens",
+  "models": [
+    "SENTRON PAC3100"
+  ],
+  "status": "third_party",
+  "source": "Third-party register list (AGG Software, aggsoft.com), not yet checked against the manufacturer's manual.",
+  "notes": "Only the first part of the list was public: averages, THD and energy registers are missing. Add them from the PAC3100 manual.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "v1": {
+      "address": 1,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 3,
+      "type": "float32"
+    },
+    "v3": {
+      "address": 5,
+      "type": "float32"
+    },
+    "i1": {
+      "address": 13,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 15,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 17,
+      "type": "float32"
+    },
+    "hz": {
+      "address": 39,
+      "type": "float32"
+    },
+    "kva": {
+      "address": 47,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kw": {
+      "address": 49,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kvar": {
+      "address": 51,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "pf": {
+      "address": 53,
+      "type": "float32"
+    }
+  }
+}

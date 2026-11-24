@@ -1,0 +1,75 @@
+{
+  "brand": "Secure",
+  "models": [
+    "Elite 440",
+    "Elite 445 (same family, not confirmed)"
+  ],
+  "status": "third_party",
+  "source": "AGG Software register list (third party). Secure's Elite 440 datasheet confirms float (IEEE754) data but has no register table.",
+  "notes": "Holding registers 40001+ (wire address = listed - 40001). Average current, kVAh and kVArh were not in the public list. Energy units not stated: compare kWh with the meter display once. THD is phase R.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "pf": {
+      "address": 139,
+      "type": "float32"
+    },
+    "v1": {
+      "address": 99,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 101,
+      "type": "float32"
+    },
+    "v3": {
+      "address": 103,
+      "type": "float32"
+    },
+    "v_ln": {
+      "address": 105,
+      "type": "float32"
+    },
+    "i1": {
+      "address": 113,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 115,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 117,
+      "type": "float32"
+    },
+    "kw": {
+      "address": 147,
+      "type": "float32"
+    },
+    "kvar": {
+      "address": 155,
+      "type": "float32"
+    },
+    "kva": {
+      "address": 163,
+      "type": "float32"
+    },
+    "hz": {
+      "address": 171,
+      "type": "float32"
+    },
+    "thd_v": {
+      "address": 177,
+      "type": "float32"
+    },
+    "thd_i": {
+      "address": 183,
+      "type": "float32"
+    },
+    "kwh": {
+      "address": 199,
+      "type": "float32"
+    }
+  }
+}

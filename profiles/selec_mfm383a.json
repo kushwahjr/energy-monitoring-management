@@ -1,0 +1,70 @@
+{
+  "brand": "Selec",
+  "models": [
+    "MFM383A"
+  ],
+  "status": "third_party",
+  "source": "Third-party register list (AGG Software, aggsoft.com), not yet checked against the manufacturer's manual.",
+  "notes": "Input registers 30000+. Modbus is an ordering option on this model. V3-N, kVAh and kVArh addresses were not in the list. Word order not documented: use Test reading.",
+  "register_type": "input",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "v1": {
+      "address": 0,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 2,
+      "type": "float32"
+    },
+    "v_ln": {
+      "address": 6,
+      "type": "float32"
+    },
+    "v_ll": {
+      "address": 14,
+      "type": "float32"
+    },
+    "i1": {
+      "address": 16,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 18,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 20,
+      "type": "float32"
+    },
+    "i_avg": {
+      "address": 22,
+      "type": "float32"
+    },
+    "kw": {
+      "address": 42,
+      "type": "float32"
+    },
+    "kva": {
+      "address": 44,
+      "type": "float32"
+    },
+    "kvar": {
+      "address": 46,
+      "type": "float32"
+    },
+    "pf": {
+      "address": 54,
+      "type": "float32"
+    },
+    "hz": {
+      "address": 56,
+      "type": "float32"
+    },
+    "kwh": {
+      "address": 58,
+      "type": "float32"
+    }
+  }
+}

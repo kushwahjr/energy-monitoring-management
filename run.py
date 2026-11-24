@@ -1,4 +1,4 @@
-"""Start the Steel Energy Logger.
+"""Start the Energy Monitoring Management.
 
   python run.py                       start with config.json
   python run.py --config cloud.json   start with another config file
@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Steel Energy Logger")
+    ap = argparse.ArgumentParser(description="Energy Monitoring Management")
     ap.add_argument("command", nargs="?", default="serve", choices=["serve", "hash-password", "new-key"])
     ap.add_argument("--config", default=str(HERE / "config.json"))
     ap.add_argument("--host")
@@ -51,7 +51,7 @@ def main():
     app = create_app(cfg_path)
     host = args.host or cfg.listen_host
     port = args.port or cfg.listen_port
-    print(f"\n  Steel Energy Logger ({cfg.mode} mode) on http://{'localhost' if host == '0.0.0.0' else host}:{port}\n")
+    print(f"\n  Energy Monitoring Management ({cfg.mode} mode) on http://{'localhost' if host == '0.0.0.0' else host}:{port}\n")
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 

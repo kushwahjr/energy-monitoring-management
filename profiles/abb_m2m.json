@@ -1,0 +1,97 @@
+{
+  "brand": "ABB",
+  "models": [
+    "M2M Ethernet (Modbus TCP)",
+    "M2M RS485 (not confirmed)"
+  ],
+  "status": "manufacturer_checked_tcp",
+  "source": "ABB M2M ETHERNET manual 2CSG445012D0201 Rev 1.0, register table (verbatim). The M2M Basic (RS485) manual has no register table.",
+  "notes": "Integer registers with scales: current mA, frequency mHz, PF x1000, power W/VA/var, energy in units of 100 Wh. For the RS485 model, ABB documents three maps chosen in M2M software; confirm with Test reading.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "v1": {
+      "address": 4098,
+      "type": "uint32"
+    },
+    "v2": {
+      "address": 4100,
+      "type": "uint32"
+    },
+    "v3": {
+      "address": 4102,
+      "type": "uint32"
+    },
+    "i_avg": {
+      "address": 4110,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "i1": {
+      "address": 4112,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "i2": {
+      "address": 4114,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "i3": {
+      "address": 4116,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "pf": {
+      "address": 4118,
+      "type": "int32",
+      "scale": 0.001
+    },
+    "kva": {
+      "address": 4134,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "kw": {
+      "address": 4142,
+      "type": "int32",
+      "scale": 0.001
+    },
+    "kvar": {
+      "address": 4150,
+      "type": "int32",
+      "scale": 0.001
+    },
+    "kwh": {
+      "address": 4158,
+      "type": "uint32",
+      "scale": 0.1
+    },
+    "kvarh": {
+      "address": 4160,
+      "type": "uint32",
+      "scale": 0.1
+    },
+    "hz": {
+      "address": 4166,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "kvah": {
+      "address": 4262,
+      "type": "uint32",
+      "scale": 0.1
+    },
+    "thd_v": {
+      "address": 4226,
+      "type": "uint32",
+      "scale": 0.01
+    },
+    "thd_i": {
+      "address": 4232,
+      "type": "uint32",
+      "scale": 0.01
+    }
+  }
+}

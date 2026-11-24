@@ -1,0 +1,96 @@
+{
+  "brand": "Siemens",
+  "models": [
+    "SENTRON PAC3200"
+  ],
+  "status": "partly_checked",
+  "source": "Siemens PAC3200 manual A5E01168664B-04, table 'Modbus measured variables' (offsets 1-69), matching AGG Software's list. Energy offsets 801/817/833 read from a summary of the same manual and need one check on site.",
+  "notes": "Power in W/VA/var and energy in Wh are converted to kW and kWh. Energy is tariff 1 only; if you use tariff 2, add it. Offsets are used as the wire address.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "v1": {
+      "address": 1,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 3,
+      "type": "float32"
+    },
+    "v3": {
+      "address": 5,
+      "type": "float32"
+    },
+    "i1": {
+      "address": 13,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 15,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 17,
+      "type": "float32"
+    },
+    "thd_v": {
+      "address": 43,
+      "type": "float32"
+    },
+    "thd_i": {
+      "address": 49,
+      "type": "float32"
+    },
+    "hz": {
+      "address": 55,
+      "type": "float32"
+    },
+    "v_ln": {
+      "address": 57,
+      "type": "float32"
+    },
+    "v_ll": {
+      "address": 59,
+      "type": "float32"
+    },
+    "i_avg": {
+      "address": 61,
+      "type": "float32"
+    },
+    "kva": {
+      "address": 63,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kw": {
+      "address": 65,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kvar": {
+      "address": 67,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "pf": {
+      "address": 69,
+      "type": "float32"
+    },
+    "kwh": {
+      "address": 801,
+      "type": "float64",
+      "scale": 0.001
+    },
+    "kvarh": {
+      "address": 817,
+      "type": "float64",
+      "scale": 0.001
+    },
+    "kvah": {
+      "address": 833,
+      "type": "float64",
+      "scale": 0.001
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# Steel Energy Logger
+# Energy Monitoring Management
 
 Logs electricity data from multifunction meters (MFMs) in a steel plant and shows it on
 Windows, macOS, Android and iPhone. Data is kept on a plant PC and, optionally, copied to a
@@ -50,6 +50,30 @@ Open **Settings** on the plant PC itself (settings are only editable from the PC
    **main incomer** (plant totals use main incomers, so feeders are not counted twice).
 4. Press **Test reading** to check the wiring, then **Save and restart logging**.
 
+## Meter models included
+
+Each model's register map is in `profiles/`, with the source it came from. "Not confirmed" means the
+addresses come from a third-party list or a partly readable manual: press **Test reading** once per model
+and compare the numbers with the meter's own display before relying on it. Test reading also detects a
+swapped word order and tells you the fix.
+
+| Brand | Models | Map source | Status |
+|---|---|---|---|
+| Schneider | PM5300, PM5100, PM2100, EM6400NG/NG+ (PowerLogic map) | Schneider PM5350 register list (2010 draft) + third-party list, both agree | Not confirmed per model |
+| Selec | MFM384, MFM383A | Third-party list (AGG Software) | Not confirmed |
+| Rishabh | Rish Master 3440, 3440i | Rishabh manual (partly legible) + third-party list, agree | Check energy units |
+| Secure | Elite 440 (445 likely same) | Third-party list | Not confirmed |
+| Elmeasure | LG+ | Third-party list | Not confirmed, units assumed |
+| Siemens | PAC3200 | Siemens manual | Check energy registers |
+| Siemens | PAC3100 | Third-party list, partial (no energy) | Not confirmed |
+| ABB | M2M Ethernet | ABB M2M Ethernet manual | Checked; RS485 model not confirmed |
+| Socomec | DIRIS A40 / A41 | Socomec manual | Checked |
+
+**Not included yet, no reliable register list found online:** Schneider EM6433, EM6436 (two sources
+contradict each other), EM3250; Rishabh 3430; L&T WL series; ABB M4M; Socomec DIRIS A20. Send the
+Modbus/communication manual for these (a photo or PDF is fine) and they can be added, or paste the
+map into Settings → Meter models.
+
 ## Cloud server
 
 Run the same program on any cloud VM (or with the `Dockerfile`) in cloud mode:
@@ -74,7 +98,7 @@ tests/          end-to-end and report tests:  python -m pytest -q tests
 
 ## Not done yet
 
-- Real register maps for your meter models (send the model names or manuals).
+- Register maps for Schneider EM6433/EM6436/EM3250, Rishabh 3430, L&T WL, ABB M4M, Socomec DIRIS A20.
 - Native installers (a Windows `.exe` service and a Mac app). For now the start scripts are used.
 - Email / SMS / WhatsApp alarm alerts, monthly bill-style reports, shift-wise (A/B/C) reports.
 - Production-per-tonne (kWh/ton) reports if furnace tonnage is entered.

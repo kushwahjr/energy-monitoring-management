@@ -30,6 +30,7 @@ class Register:
     address: int
     type: str = "float32"
     scale: float = 1.0
+    transform: str = ""  # "pf_4q": decode 4-quadrant power factor (values 1..2 / -2..-1)
 
     @property
     def length(self) -> int:
@@ -157,7 +158,8 @@ def parse_config(raw: dict, base: Path) -> Config:
             rtype = r.get("type", "float32")
             if rtype not in DATA_TYPES:
                 raise ConfigError(f"profile '{pname}', {param}: unknown type '{rtype}'")
-            regs.append(Register(param, int(_req(r, "address", f"profile '{pname}', {param}")), rtype, float(r.get("scale", 1.0))))
+            regs.append(Register(param, int(_req(r, "address", f"profile '{pname}', {param}")), rtype,
+                                 float(r.get("scale", 1.0)), str(r.get("transform", ""))))
         rt = p.get("register_type", "holding")
         if rt not in ("holding", "input"):
             raise ConfigError(f"profile '{pname}': register_type must be 'holding' or 'input'")

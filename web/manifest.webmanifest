@@ -1,6 +1,6 @@
 {
-  "name": "Steel Energy Logger",
-  "short_name": "Energy Log",
+  "name": "Energy Monitoring Management",
+  "short_name": "Energy Monitor",
   "description": "Electricity logging from multifunction meters",
   "start_url": "./",
   "scope": "./",

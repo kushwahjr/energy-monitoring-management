@@ -1,5 +1,5 @@
 "use strict";
-// Steel Energy Logger dashboard. Plain JavaScript, no build step, works offline on the plant LAN.
+// Energy Monitoring Management dashboard. Plain JavaScript, no build step, works offline on the plant LAN.
 
 const S = { info: null, meters: [], timer: null, route: "" };
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -25,7 +25,7 @@ async function boot() {
   catch (e) { $("#view").innerHTML = `<p class="pad err">Cannot reach the logger server. Check that the plant PC is on and you are on the same network.</p>`; return; }
   $("#plantName").textContent = S.info.plant_name;
   $("#modeLine").textContent = S.info.mode === "cloud" ? "Cloud view, all plants" : "Plant logger";
-  document.title = S.info.plant_name + " · Energy";
+  document.title = S.info.plant_name + "";
   if (S.info.login_required && !S.info.user) return showLogin();
   afterLogin();
 }
@@ -267,6 +267,13 @@ async function viewSettings(preloaded) {
   if (!data) { try { data = await api("/api/settings"); } catch (e) { if (e.message !== "login") v.innerHTML = `<p class="pad err">${esc(e.message)}</p>`; return; } }
   const cfg = data.config;
   cfg.ports = cfg.ports || {}; cfg.meters = cfg.meters || []; cfg.profiles = cfg.profiles || {}; cfg.cloud_sync = cfg.cloud_sync || { url: "", api_key: "", sync_seconds: 30 };
+  const STATUS = { manufacturer_checked: "", manufacturer_checked_tcp: "", partly_checked: " (check energy)", manufacturer_partly_checked: " (check energy)", third_party: " (not yet confirmed)" };
+  const modelLabel = p => {
+    if (p === "simulated") return "Simulated meter";
+    const d = data.library_profiles[p];
+    if (!d || !d.brand) return p;
+    return `${d.brand} ${(d.models || []).map(x => x.replace(/ \(.*\)$/, "")).join(", ")}${STATUS[d.status] ?? ""}`;
+  };
   const profileNames = () => ["simulated", ...new Set([...Object.keys(data.library_profiles), ...Object.keys(cfg.profiles)])];
 
   const portForm = (name, p) => `<div class="settings-item" data-port="${esc(name)}">
@@ -291,7 +298,7 @@ async function viewSettings(preloaded) {
       <label class="f">Name<input data-k="name" value="${esc(m.name || "")}"></label>
       <label class="f">Area<input data-k="area" value="${esc(m.area || "")}" placeholder="Melt Shop"></label>
       <label class="f">Connection<select data-k="port">${Object.keys(cfg.ports).map(p => `<option ${m.port === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
-      <label class="f">Meter model<select data-k="profile">${profileNames().map(p => `<option ${m.profile === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
+      <label class="f">Meter model<select data-k="profile">${profileNames().map(p => `<option value="${esc(p)}" ${m.profile === p ? "selected" : ""}>${esc(modelLabel(p))}</option>`).join("")}</select></label>
       <label class="f">Modbus address (slave ID)<input data-k="unit_id" type="number" min="1" max="247" value="${m.unit_id ?? 1}"></label>
       <label class="f">Contract demand kVA<input data-k="contract_kva" type="number" value="${m.contract_kva ?? ""}"></label>
       <label class="f">Main incomer?<select data-k="is_main"><option value="false">No, a feeder</option><option value="true" ${m.is_main ? "selected" : ""}>Yes, count in plant total</option></select></label>
@@ -316,7 +323,10 @@ async function viewSettings(preloaded) {
     <h2>Meters</h2><div id="sMeters">${cfg.meters.map(meterForm).join("")}</div>
     <button id="sAddMeter">Add meter</button>
     <h2>Meter models (register maps)</h2>
-    <p class="hint">Built-in: ${profileNames().filter(n => data.library_profiles[n]).map(esc).join(", ")}. Templates are placeholders; add your model's addresses from its Modbus manual below, as JSON. Example: {"my_meter": {"register_type": "holding", "word_order": "big", "registers": {"kw": {"address": 3060, "type": "float32"}}}}</p>
+    <details><summary>Built-in models and where each register map came from</summary><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Model</th><th>Source</th><th>Notes</th></tr></thead><tbody>
+      ${Object.entries(data.library_profiles).filter(([, d]) => d.brand).map(([n, d]) => `<tr><td style="white-space:normal">${esc(modelLabel(n))}</td><td style="white-space:normal">${esc(d.source || "")}</td><td style="white-space:normal">${esc(d.notes || "")}</td></tr>`).join("")}
+    </tbody></table></div></details>
+    <p class="hint">Templates are placeholders; add your model's addresses from its Modbus manual below, as JSON. Example: {"my_meter": {"register_type": "holding", "word_order": "big", "registers": {"kw": {"address": 3060, "type": "float32"}}}}</p>
     <textarea id="sProfiles" rows="8">${esc(JSON.stringify(cfg.profiles, null, 2))}</textarea>
     <h2>Cloud sync</h2><div class="panel"><div class="form">
       <label class="f">Cloud server address<input id="sCloudUrl" value="${esc(cfg.cloud_sync.url || "")}" placeholder="https://energy.yourcompany.com"></label>
@@ -362,7 +372,7 @@ async function viewSettings(preloaded) {
     out.textContent = "Reading…"; out.className = "hint";
     try {
       const r = await api("/api/settings/test-meter", { method: "POST", body: JSON.stringify({ meter: { ...readMeter(el), enabled: true }, ports: readPorts(), profiles: readProfiles() }) });
-      if (r.ok) { out.className = "hint"; out.style.color = "var(--ok)"; out.textContent = `OK: ${fmtNum(r.values.kw)} kW, ${fmtNum(r.values.v_ln ?? r.values.v_ll, 0)} V, PF ${fmtNum(r.values.pf, 3)}`; }
+      if (r.ok) { out.className = "hint"; out.style.color = "var(--ok)"; out.textContent = `OK: ${fmtNum(r.values.kw)} kW, ${fmtNum(r.values.v_ln ?? r.values.v_ll, 0)} V, PF ${fmtNum(r.values.pf, 3)}, ${fmtNum(r.values.hz, 2)} Hz`; if (r.hint) { out.style.color = "var(--warn)"; out.textContent += ". " + r.hint; } }
       else { out.className = "err"; out.textContent = r.error; }
     } catch (e) { out.className = "err"; out.textContent = e.message; }
   }));

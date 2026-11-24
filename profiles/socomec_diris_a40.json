@@ -1,0 +1,82 @@
+{
+  "brand": "Socomec",
+  "models": [
+    "DIRIS A40",
+    "DIRIS A41"
+  ],
+  "status": "manufacturer_checked",
+  "source": "Socomec DIRIS A40/A41 JBUS/MODBUS operating instructions and DIRIS A40 Ethernet manual 536 181 B (re-hosted copies), 2-word table at 0x0300.",
+  "notes": "Integer registers: voltage and frequency /100, current in mA, power kW/100, PF /1000 (sign shows leading/lagging), energy in kWh. Not confirmed for DIRIS A20.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "i1": {
+      "address": 768,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "i2": {
+      "address": 770,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "i3": {
+      "address": 772,
+      "type": "uint32",
+      "scale": 0.001
+    },
+    "v1": {
+      "address": 782,
+      "type": "uint32",
+      "scale": 0.01
+    },
+    "v2": {
+      "address": 784,
+      "type": "uint32",
+      "scale": 0.01
+    },
+    "v3": {
+      "address": 786,
+      "type": "uint32",
+      "scale": 0.01
+    },
+    "hz": {
+      "address": 788,
+      "type": "uint32",
+      "scale": 0.01
+    },
+    "kw": {
+      "address": 790,
+      "type": "int32",
+      "scale": 0.01
+    },
+    "kvar": {
+      "address": 792,
+      "type": "int32",
+      "scale": 0.01
+    },
+    "kva": {
+      "address": 794,
+      "type": "uint32",
+      "scale": 0.01
+    },
+    "pf": {
+      "address": 796,
+      "type": "int32",
+      "scale": 0.001
+    },
+    "kwh": {
+      "address": 856,
+      "type": "uint32"
+    },
+    "kvarh": {
+      "address": 858,
+      "type": "uint32"
+    },
+    "kvah": {
+      "address": 860,
+      "type": "uint32"
+    }
+  }
+}

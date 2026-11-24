@@ -2,9 +2,10 @@
 
   python tools/fake_meter.py --port 5020 --units 1 2 3
   python tools/fake_meter.py --port 5021 --framing rtu     (acts like a transparent gateway)
+  python tools/fake_meter.py --profile siemens_pac3200        (pretends to be that meter model)
 
-It answers "read holding/input registers" (function 3 and 4) with the registers of
-profiles/generic_float32_template.json, filled with changing values.
+It answers "read holding/input registers" (function 3 and 4) with the registers of the
+chosen model profile (default: generic_float32_template), filled with changing values.
 """
 
 import argparse
@@ -17,7 +18,22 @@ import sys
 import time
 from pathlib import Path
 
-PROFILE = json.loads((Path(__file__).resolve().parent.parent / "profiles" / "generic_float32_template.json").read_text())
+PROFILES = Path(__file__).resolve().parent.parent / "profiles"
+PROFILE = json.loads((PROFILES / "generic_float32_template.json").read_text())
+PACK = {"float32": ">f", "float64": ">d", "int16": ">h", "uint16": ">H", "int32": ">i", "uint32": ">I", "int64": ">q", "uint64": ">Q"}
+
+
+def encode(value: float, reg: dict, word_order: str) -> list[int]:
+    """Turn an engineering value into the meter's raw registers (inverse of the logger's decoding)."""
+    t = reg.get("type", "float32")
+    raw = value / reg.get("scale", 1.0)
+    if reg.get("transform") == "pf_4q" and value < 0:
+        raw = value  # keep simple: lagging/leading sign as-is
+    if not t.startswith("float"):
+        raw = int(round(raw))
+    b = struct.pack(PACK[t], raw)
+    words = [int.from_bytes(b[i:i + 2], "big") for i in range(0, len(b), 2)]
+    return words[::-1] if word_order == "little" else words
 
 
 def crc16(data: bytes) -> int:
@@ -34,6 +50,7 @@ class Meters:
         self.units = units
         self.energy = {u: {"kwh": 1000.0 * u, "kvah": 1100.0 * u, "kvarh": 400.0 * u} for u in units}
         self.t = {u: time.time() for u in units}
+        self.last: dict[int, dict] = {}
 
     def registers(self, unit: int) -> dict[int, int]:
         now = time.time()
@@ -49,16 +66,20 @@ class Meters:
         e["kvarh"] += kva * math.sqrt(1 - pf * pf) * dt / 3600
         vals = {"v1": v, "v2": v + 1, "v3": v - 1, "v_ln": v, "v_ll": v * 1.732, "i1": i, "i2": i, "i3": i, "i_avg": i,
                 "kw": kva * pf, "kva": kva, "kvar": kva * math.sqrt(1 - pf * pf), "pf": pf, "hz": 50.0, **e}
+        vals["thd_v"], vals["thd_i"] = 3.2, 18.5
+        self.last[unit] = vals
         regs = {}
+        off = PROFILE.get("address_offset", 0)
         for param, r in PROFILE["registers"].items():
-            hi, lo = struct.unpack(">HH", struct.pack(">f", vals[param]))
-            regs[r["address"]], regs[r["address"] + 1] = hi, lo
+            for i, word in enumerate(encode(vals[param], r, PROFILE.get("word_order", "big"))):
+                regs[r["address"] + off + i] = word
         return regs
 
     def answer(self, unit: int, fc: int, addr: int, count: int) -> bytes | None:
         if unit not in self.units:
             return None  # no meter at this address: stay silent like RS485
-        if fc not in (3, 4) or not 1 <= count <= 125:
+        want = 3 if PROFILE.get("register_type", "holding") == "holding" else 4
+        if fc != want or not 1 <= count <= 125:
             return bytes([fc | 0x80, 1])
         regs = self.registers(unit)
         data = b"".join(struct.pack(">H", regs.get(a, 0)) for a in range(addr, addr + count))
@@ -70,7 +91,10 @@ async def main():
     ap.add_argument("--port", type=int, default=5020)
     ap.add_argument("--units", type=int, nargs="+", default=[1])
     ap.add_argument("--framing", choices=["tcp", "rtu"], default="tcp")
+    ap.add_argument("--profile", default="generic_float32_template")
     a = ap.parse_args()
+    global PROFILE
+    PROFILE = json.loads((PROFILES / f"{a.profile}.json").read_text())
     meters = Meters(a.units)
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):

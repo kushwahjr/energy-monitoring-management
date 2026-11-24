@@ -1,0 +1,78 @@
+{
+  "brand": "Elmeasure",
+  "models": [
+    "LG+ (Little Genius Plus)"
+  ],
+  "status": "third_party",
+  "source": "AGG Software register list (third party). No Elmeasure document found online.",
+  "notes": "Holding registers. Units are not stated: this map assumes W, VA and Wh (converted to kW, kVA, kWh). If Test reading shows values 1000 times too small, remove the 0.001 scales. kVAr, kVArh and THD are not in the public list.",
+  "register_type": "holding",
+  "word_order": "big",
+  "address_offset": 0,
+  "registers": {
+    "kw": {
+      "address": 100,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "pf": {
+      "address": 116,
+      "type": "float32"
+    },
+    "kva": {
+      "address": 124,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "v_ll": {
+      "address": 132,
+      "type": "float32"
+    },
+    "v_ln": {
+      "address": 140,
+      "type": "float32"
+    },
+    "v1": {
+      "address": 142,
+      "type": "float32"
+    },
+    "v2": {
+      "address": 144,
+      "type": "float32"
+    },
+    "v3": {
+      "address": 146,
+      "type": "float32"
+    },
+    "i_avg": {
+      "address": 148,
+      "type": "float32"
+    },
+    "i1": {
+      "address": 150,
+      "type": "float32"
+    },
+    "i2": {
+      "address": 152,
+      "type": "float32"
+    },
+    "i3": {
+      "address": 154,
+      "type": "float32"
+    },
+    "hz": {
+      "address": 156,
+      "type": "float32"
+    },
+    "kwh": {
+      "address": 158,
+      "type": "float32",
+      "scale": 0.001
+    },
+    "kvah": {
+      "address": 160,
+      "type": "float32",
+      "scale": 0.001
+    }
+  }
+}
