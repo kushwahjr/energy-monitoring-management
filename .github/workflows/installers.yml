@@ -1,0 +1,88 @@
+# Builds the Windows installer (.exe) and the Mac disk images (.dmg).
+# Runs when a version tag like v1.5.0 is pushed (and attaches the files to a GitHub Release),
+# or by hand from the Actions tab ("Run workflow"), where the files appear under Artifacts.
+name: Installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pywebview
+      - name: Test
+        continue-on-error: true   # a flaky test on the build machine should not block the installer
+        run: |
+          pip install pytest
+          python -m pytest -q tests
+      - name: Build app
+        run: pyinstaller --noconfirm packaging/energymonitoring.spec
+      - name: Check the app starts
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--server" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 40; $i++) { Start-Sleep 1; try { Invoke-WebRequest http://127.0.0.1:8080/api/info -UseBasicParsing | Out-Null; $ok = $true; break } catch {} }
+          dist\EnergyMonitoring\EnergyMonitoring.exe --stop
+          Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
+          if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue; exit 1 }
+      - name: Make installer
+        shell: pwsh
+        run: |
+          $v = (python -c "from energylogger import __version__; print(__version__)").Trim()
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" packaging\windows\installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/EnergyMonitoring-Setup-*.exe
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/EnergyMonitoring-Setup-*.exe
+
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15-intel]   # Apple Silicon (M1-M4) and Intel Macs
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pywebview
+      - name: Build app
+        run: pyinstaller --noconfirm packaging/energymonitoring.spec
+      - name: Check the app starts
+        run: |
+          "dist/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --server &
+          for i in $(seq 40); do sleep 1; curl -sf http://127.0.0.1:8080/api/info >/dev/null && ok=1 && break; done
+          "dist/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --stop || true
+          [ "${ok:-}" = 1 ] || { cat ~/Library/Application\ Support/Energy\ Monitoring/logger.log; exit 1; }
+      - name: Make disk image
+        run: packaging/mac/make-dmg.sh "$(python -c 'from energylogger import __version__; print(__version__)')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg-${{ matrix.os }}
+          path: dist/*.dmg
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg

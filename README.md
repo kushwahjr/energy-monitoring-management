@@ -66,6 +66,27 @@ DGs cool down for about a minute and stop. Everything is logged, the same as a r
 - **Users**: roles are Admin (everything, plus settings) and Viewer (only the pages and panels ticked).
 - **Shifts**: Settings → Shifts. A night shift belongs to the date it starts. Reports → Show → Shift-wise.
 
+## Installers: Windows .exe and Mac .dmg
+
+Ready-made installers are on the GitHub **Releases** page of this repository:
+
+- **Windows 10/11**: `EnergyMonitoring-Setup-<version>.exe`. Run it and keep the ticks for *start logging when Windows
+  starts* and *allow phones on the plant network*. Open *Energy Monitoring* from the Start menu.
+- **Mac**: `EnergyMonitoring-<version>-mac-arm64.dmg` for Apple Silicon (M1 to M4), `...-x86_64.dmg` for Intel Macs.
+  Drag the app to Applications. The first time, macOS may block it because it is not signed with an Apple
+  certificate yet: System Settings → Privacy & Security → *Open Anyway*.
+
+The app opens the dashboard in its own window. Closing the window does not stop logging: the logger keeps running in
+the background, serves phones and other PCs on the network, and starts again with the computer. *Stop logging* is in
+the Start menu (Windows); on a Mac run `"/Applications/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --stop`.
+Settings and data live in `%LOCALAPPDATA%\Energy Monitoring` (Windows) or `~/Library/Application Support/Energy Monitoring`
+(Mac), so updating or uninstalling the app keeps them.
+
+To make new installers: push a tag such as `v1.5.1` (with the same number in `energylogger/__init__.py`), or run the
+*Installers* workflow by hand from the Actions tab. The recipe is in `packaging/` and `.github/workflows/installers.yml`.
+The installers are not code-signed; signing needs a Windows code-signing certificate and an Apple Developer account
+(about US$99 a year), which removes the security warnings.
+
 ## Your company's look
 
 Settings → **Branding** (admin only):
