@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from .config import Config, Meter
 from .db import Database
+from .plantsim import PlantSim
 from .readers import ModbusPortReader, ReadError, SimulatedReader
 
 log = logging.getLogger("energylogger")
@@ -54,11 +55,19 @@ class Collector:
         self.config = config
         self.db = db
         self.state: dict[str, MeterState] = {m.id: MeterState() for m in config.meters}
-        self.sim = SimulatedReader()
+        self.plant = PlantSim(config) if any(p.kind == "simulator" for p in config.ports.values()) else None
+        self.sim = SimulatedReader(self.plant)
+        self.watch = PlantWatch(config, db)
         self.port_readers = {
             name: ModbusPortReader(p) for name, p in config.ports.items() if p.kind != "simulator"
         }
         self._task: asyncio.Task | None = None
+        self._wake: asyncio.Event | None = None
+
+    def wake(self):
+        """Poll again now (used by the demo power cut switch)."""
+        if self._wake:
+            self._wake.set()
 
     def start(self):
         self._task = asyncio.create_task(self._run())
@@ -78,7 +87,22 @@ class Collector:
             started = time.monotonic()
             # Meters on different ports are read in parallel; meters on one port take turns.
             await asyncio.gather(*(self.poll_meter(m) for m in self.config.meters if m.enabled))
-            await asyncio.sleep(max(0.2, self.config.poll_seconds - (time.monotonic() - started)))
+            try:
+                self.watch.update(self.state, time.time())
+            except Exception:
+                log.exception("plant event check failed")
+            wait = self.config.poll_seconds
+            if self.plant:  # demo: poll faster while the DGs start or change over, so the animation keeps up
+                dt = self.plant.phase(time.time())["dt"]
+                if dt is not None and dt < 70:
+                    wait = min(wait, 1.5)
+            if self._wake is None:
+                self._wake = asyncio.Event()
+            self._wake.clear()
+            try:
+                await asyncio.wait_for(self._wake.wait(), max(0.2, wait - (time.monotonic() - started)))
+            except asyncio.TimeoutError:
+                pass
 
     async def poll_meter(self, meter: Meter):
         st = self.state[meter.id]
@@ -128,3 +152,92 @@ class Collector:
                     row[k] = values[k]
             self.db.insert_reading(int(now), meter.id, row)
             st.acc, st.acc_n, st.last_log = {}, 0, now
+
+
+def has_voltage(v: dict) -> bool:
+    return (v.get("v_ln") or 0) > 50 or (v.get("v_ll") or 0) > 90
+
+
+def carries_load(v: dict) -> bool:
+    return abs(v.get("kw") or 0) > 1 or (v.get("i_avg") or 0) > 2
+
+
+def fmt_dur(sec: float) -> str:
+    sec = int(sec)
+    h, m = divmod(sec // 60, 60)
+    return f"{h} h {m} min" if h else (f"{m} min {sec % 60} s" if m else f"{sec} s")
+
+
+class PlantWatch:
+    """Turns live values into plant events: power cut and restore, DG start and stop, PCC changeover.
+
+    Works the same for real meters and the demo. Events go into the events table, so they are
+    logged with time, show on the Alarms page and sync to the cloud.
+    """
+
+    def __init__(self, config: Config, db: Database):
+        self.config, self.db = config, db
+        self.grid = [m for m in config.meters if m.is_main and not m.is_dg and m.enabled]
+        self.dgs = [m for m in config.meters if m.is_dg and m.enabled]
+        names = {p["id"]: p["name"] for p in config.panels}
+        self.panels: dict[str, list[Meter]] = {}
+        for m in config.meters:
+            if m.enabled and m.panel and m.position == "incomer" and not m.is_dg:
+                self.panels.setdefault(m.panel, []).append(m)
+        self.panels = {k: v for k, v in self.panels.items() if len(v) > 1}
+        self.panel_names = names
+        self.grid_up: bool | None = None
+        self.cut_at: float | None = None
+        self.dg_on: dict[str, float | None] = {}
+        self.dg_kwh: dict[str, float] = {}
+        self.active_inc: dict[str, str | None] = {}
+
+    def update(self, state: dict, now: float):
+        ts = int(now)
+        if self.grid:
+            vals = [(state[m.id].values if state[m.id].online else {}) for m in self.grid]
+            up = any(has_voltage(v) for v in vals)
+            if self.grid_up is None:
+                self.grid_up = up
+            elif up != self.grid_up:
+                m = self.grid[0]
+                if not up:
+                    self.cut_at = now
+                    self.db.insert_event(ts, m.id, "power_cut", "Power cut: grid supply lost", True)
+                else:
+                    took = f" after {fmt_dur(now - self.cut_at)}" if self.cut_at else ""
+                    self.db.insert_event(ts, m.id, "power_cut", f"Power restored{took}", False)
+                    self.cut_at = None
+                self.grid_up = up
+        for m in self.dgs:
+            st = state[m.id]
+            v = st.values if st.online else {}
+            running = (v.get("hz") or 0) > 40 and has_voltage(v)
+            was = self.dg_on.get(m.id, "unset")
+            if was == "unset":
+                self.dg_on[m.id] = now if running else None
+                self.dg_kwh[m.id] = v.get("kwh") or 0
+                continue
+            if running and was is None:
+                self.dg_on[m.id] = now
+                self.dg_kwh[m.id] = v.get("kwh") or 0
+                why = " (grid power cut)" if self.grid_up is False else ""
+                self.db.insert_event(ts, m.id, "dg_run", f"{m.name} started{why}", True)
+            elif not running and was is not None:
+                kwh = max(0.0, (v.get("kwh") or self.dg_kwh.get(m.id, 0)) - self.dg_kwh.get(m.id, 0))
+                self.db.insert_event(ts, m.id, "dg_run", f"{m.name} stopped after {fmt_dur(now - was)}, {kwh:,.0f} kWh", False)
+                self.dg_on[m.id] = None
+        for pid, incs in self.panels.items():
+            live = [m for m in incs if state[m.id].online and carries_load(state[m.id].values)]
+            cur = live[0].id if len(live) == 1 else None
+            prev = self.active_inc.get(pid, "unset")
+            self.active_inc[pid] = cur
+            if prev == "unset" or cur == prev:
+                continue
+            name = self.panel_names.get(pid, pid)
+            if cur is None and not live:
+                self.db.insert_event(ts, incs[0].id, "changeover", f"{name}: no supply on either incomer", True)
+            elif cur is not None:
+                src = next(m for m in incs if m.id == cur)
+                on_dg = src.fed_from in {d.panel for d in self.dgs} or src.fed_from in {d.id for d in self.dgs}
+                self.db.insert_event(ts, cur, "changeover", f"{name} changed over to {'DG' if on_dg else 'transformer'} supply ({src.name})", False)

@@ -138,43 +138,70 @@ class ModbusPortReader:
 
 
 class SimulatedReader:
-    """Generates realistic readings for a steel plant feeder (furnace-like load swings)."""
+    """Generates realistic readings for a steel plant feeder (furnace-like load swings).
 
-    def __init__(self):
+    With a PlantSim attached it also follows the demo grid switch: dead feeders during a power cut,
+    DGs starting and carrying the PCCs they back up, and PCCs changing over.
+    """
+
+    def __init__(self, plant=None):
         self.state: dict[str, dict] = {}
+        self.plant = plant  # PlantSim or None
 
     def _base(self, meter: Meter) -> dict:
         rnd = random.Random(meter.id)
         rated = meter.contract_kva or rnd.choice([500, 800, 1250, 2000])
         return {"rated": rated, "kwh": rnd.uniform(1e5, 9e5), "kvah": 0.0, "kvarh": 0.0, "t": time.time(),
-                "phase": rnd.uniform(0, 6.28), "pf0": rnd.uniform(0.86, 0.97)}
+                "phase": rnd.uniform(0, 6.28), "pf0": rnd.uniform(0.86, 0.97), "kw_now": 0.0}
 
     async def read(self, meter: Meter, profile: Profile | None = None) -> dict[str, float]:
         s = self.state.setdefault(meter.id, self._base(meter))
         now = time.time()
         dt_h = (now - s["t"]) / 3600
         s["t"] = now
-        cycle = 0.55 + 0.35 * math.sin(now / 300 + s["phase"]) + random.uniform(-0.08, 0.08)
-        kva = max(0.02, cycle) * s["rated"]
+        ps = self.plant.meter_state(meter, now) if self.plant else {"live": True, "scale": 1.0, "dg": None}
+        v_nom, hz = 239 + random.uniform(-4, 4), 50 + random.uniform(-0.08, 0.08)
         pf = min(0.999, max(0.6, s["pf0"] + random.uniform(-0.04, 0.03)))
+        if ps["dg"] is not None:  # a generator
+            dg = ps["dg"]
+            if dg == "off":
+                v_nom, hz, kva = 0.0, 0.0, 0.0
+            elif dg == "cranking":
+                f = min(1.0, (ps.get("dt") or 0) / 6)
+                v_nom, hz, kva = v_nom * f, 50 * f, 0.0
+            elif dg == "idle":
+                kva = 0.012 * s["rated"]
+                pf = 0.3
+            else:
+                share = sum(self.state.get(i, {}).get("kw_now", 0.0) for i in self.plant.dg_inc) / max(len(self.plant.dgs), 1)
+                kw_dg = share * random.uniform(0.97, 1.03)
+                pf = 0.86 + random.uniform(-0.02, 0.02)
+                kva = kw_dg / pf
+        else:
+            cycle = 0.55 + 0.35 * math.sin(now / 300 + s["phase"]) + random.uniform(-0.08, 0.08)
+            kva = max(0.02, cycle) * s["rated"] * ps["scale"]
+            if not ps["live"]:
+                v_nom, hz = 0.0, 0.0
         kw = kva * pf
         kvar = math.sqrt(max(kva * kva - kw * kw, 0))
-        v_ln = 239 + random.uniform(-4, 4)
-        v = [v_ln + random.uniform(-2, 2) for _ in range(3)]
-        i_avg = kva * 1000 / (3 * v_ln)
+        s["kw_now"] = kw
+        v = [v_nom + (random.uniform(-2, 2) if v_nom else 0) for _ in range(3)]
+        i_avg = kva * 1000 / (3 * v_nom) if v_nom > 20 else 0.0
         i = [i_avg * random.uniform(0.94, 1.06) for _ in range(3)]
-        s["kwh"] += kw * dt_h
         s["kvah"] = s.get("kvah") or s["kwh"] / s["pf0"]
-        s["kvah"] += kva * dt_h
         s["kvarh"] = s.get("kvarh") or s["kwh"] * 0.4
+        s["kwh"] += kw * dt_h
+        s["kvah"] += kva * dt_h
         s["kvarh"] += kvar * dt_h
-        return {
-            "v_ln": v_ln, "v_ll": v_ln * math.sqrt(3), "v1": v[0], "v2": v[1], "v3": v[2],
+        out = {
+            "v_ln": v_nom, "v_ll": v_nom * math.sqrt(3), "v1": v[0], "v2": v[1], "v3": v[2],
             "i_avg": i_avg, "i1": i[0], "i2": i[1], "i3": i[2],
-            "kw": kw, "kva": kva, "kvar": kvar, "pf": pf, "hz": 50 + random.uniform(-0.08, 0.08),
+            "kw": kw, "kva": kva, "kvar": kvar, "hz": hz,
             "kwh": s["kwh"], "kvah": s["kvah"], "kvarh": s["kvarh"],
-            "thd_v": random.uniform(2, 6), "thd_i": random.uniform(8, 25),
         }
+        if kva > 0:
+            out.update(pf=pf, thd_v=random.uniform(2, 6), thd_i=random.uniform(8, 25))
+        return out
 
     async def close(self):
         pass

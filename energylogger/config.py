@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,8 +86,24 @@ class Meter:
     enabled: bool = True
     contract_kva: float | None = None
     is_main: bool = False  # main incomer: counted in the plant total (feeders are not, to avoid double counting)
-    machine: str = ""  # picture shown on the plant diagram, e.g. "induction_furnace"
+    machine: str = ""  # picture shown on the plant diagram, e.g. "induction_furnace"; "dg_set" marks a generator
     alarms: Alarms = field(default_factory=Alarms)
+    # where it sits on the single-line diagram
+    panel: str = ""        # panel (bus) id from config "panels"; "" = the one plant bus
+    position: str = ""     # "incomer" (above the bus) or "feeder" (below it)
+    fed_from: str = ""     # incomers: the panel or meter id that supplies it
+    feeds: str = ""        # feeders: the panel id it supplies, e.g. a transformer feeding a PCC
+
+    @property
+    def is_dg(self) -> bool:
+        return not self.fed_from and is_dg(self.machine, self.name)  # something fed from elsewhere is not a generator
+
+
+def is_dg(machine: str, name: str = "") -> bool:
+    if machine:
+        return machine == "dg_set"
+    n = name or ""
+    return bool(re.search(r"\bdg\b|genset|generator", n, re.I)) and not re.search(r"i/c|incom|feeder|pcc|mcc|panel", n, re.I)
 
 
 @dataclass
@@ -96,11 +114,32 @@ class CloudSync:
     batch_size: int = 2000
 
 
+PAGES = ("plant", "insights", "dg", "reports", "alarms")
+
+
 @dataclass
 class User:
     username: str
     password_hash: str
     role: str = "viewer"  # "viewer" or "admin"
+    name: str = ""
+    designation: str = ""
+    phone: str = ""
+    panels: list[str] = field(default_factory=list)  # empty: every panel
+    pages: list[str] = field(default_factory=lambda: list(PAGES))
+    active: bool = True
+
+
+def parse_users(raw_users: list) -> list[User]:
+    out = []
+    for u in raw_users or []:
+        out.append(User(
+            str(u["username"]), str(u["password_hash"]), u.get("role", "viewer") if u.get("role") in ("viewer", "admin") else "viewer",
+            name=str(u.get("name", ""))[:80], designation=str(u.get("designation", ""))[:80], phone=str(u.get("phone", ""))[:30],
+            panels=[str(x) for x in u.get("panels", [])], pages=[p for p in u.get("pages", PAGES) if p in PAGES] or ["plant"],
+            active=bool(u.get("active", True)),
+        ))
+    return out
 
 
 @dataclass
@@ -121,6 +160,7 @@ class Config:
     ingest_keys: dict[str, str] = field(default_factory=dict)  # cloud mode: plant_id -> api key
     users: list[User] = field(default_factory=list)
     secret_key: str = ""
+    panels: list[dict] = field(default_factory=list)  # [{"id", "name", "voltage", "note"}], in drawing order
 
 
 def _req(d: dict, key: str, where: str) -> Any:
@@ -226,6 +266,10 @@ def parse_config(raw: dict, base: Path) -> Config:
                 is_main=bool(m.get("is_main", False)),
                 machine=str(m.get("machine", ""))[:40],
                 alarms=alarms,
+                panel=str(m.get("panel", ""))[:40],
+                position=str(m.get("position") or ("incomer" if m.get("is_main") else "feeder")),
+                fed_from=str(m.get("fed_from", ""))[:40],
+                feeds=str(m.get("feeds", ""))[:40],
             )
         )
 
@@ -241,7 +285,7 @@ def parse_config(raw: dict, base: Path) -> Config:
         c = raw["cloud_sync"]
         cloud = CloudSync(c["url"].rstrip("/"), _req(c, "api_key", "cloud_sync"),
                           float(c.get("sync_seconds", 30)), int(c.get("batch_size", 2000)))
-    users = [User(u["username"], u["password_hash"], u.get("role", "viewer")) for u in raw.get("users", [])]
+    users = parse_users(raw.get("users", []))
     if mode == "cloud" and not users:
         raise ConfigError("cloud mode needs at least one user (run: python run.py hash-password)")
     if users and not raw.get("secret_key"):
@@ -264,4 +308,6 @@ def parse_config(raw: dict, base: Path) -> Config:
         ports=ports,
         profiles=profiles,
         meters=meters,
+        panels=[{"id": str(p["id"])[:40], "name": str(p.get("name", p["id"]))[:80], "voltage": str(p.get("voltage", ""))[:20],
+                 "note": str(p.get("note", ""))[:200]} for p in raw.get("panels", []) if isinstance(p, dict) and p.get("id")],
     )

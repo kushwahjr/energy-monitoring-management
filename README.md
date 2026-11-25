@@ -21,7 +21,15 @@ cloud server so it can be seen from anywhere.
 - **Reports**: daily kWh / kVAh / kVArh, average PF, **maximum demand in 15-minute blocks** (with time), peak kW. CSV export for Excel.
 - **Alarms**: low PF, high kVA/kW, voltage out of range, high current, high voltage THD, meter offline. All logged with time.
 - **Cloud sync**: the plant PC pushes data every 30 s. If the internet drops, data waits on the PC and is sent later.
-- **Login** on the cloud server (and optionally on the plant PC). Viewer and admin roles.
+- **Plant diagram in your real layout**: panel by panel as on the SLD (HT panel, DG synchronizing panel, each PCC),
+  with live power flow along the cables, breakers that open and close, dead buses shown with no supply, and grid power
+  and DG power in different colours.
+- **DG sets**: live status (stopped, cranking, running, on load), start and stop times, running timer, run hours per day
+  and in total (matched to the engine hour meter), kWh generated, load %, estimated diesel and cost, and a log of every grid power cut.
+- **Power cuts** are logged with start, end and duration, along with each DG start and stop and each PCC changeover.
+- **Sign-in for everyone**. Each person gets a user ID with name, designation and phone, and the admin picks which pages
+  (Plant, DG, Insights, Reports, Alarms) and which panels they can see. Accounts can be blocked at once.
+- **Shifts** (for example A, B, C or Day and Night) with shift-wise reports: kWh, max demand, PF, DG hours, diesel and power cuts per shift.
 - Installs as an app (PWA): in Chrome or Edge choose *Install app*; on a phone choose *Add to Home screen*.
 - A built-in **meter simulator**, so everything can be tried before connecting real meters.
 
@@ -33,8 +41,30 @@ Needs Python 3.10 or newer.
 - **macOS**: double-click `start-mac.command` (first time: right-click, Open)
 - Or by hand: `pip install -r requirements.txt` then `python run.py`
 
-Open <http://localhost:8080>. The demo plant has a 33 kV incomer with CGL, Galvalume, CCL, pickling, slitters, trimming line, boiler, ETP, RO, LPG yard, utility and workshop. Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
-To fill two weeks of demo history: `python tools/seed_demo.py --config config.json`.
+Open <http://localhost:8080> on the plant PC. The first time, it asks you to create the admin account (this can only
+be done on the plant PC itself). After that everyone signs in; add people under Settings → Users and access.
+Phones and other PCs on the same network open `http://<plant-pc-ip>:8080`.
+
+The demo plant follows the CRM Complex SLD: 22 kV HT panel with TR-1 to TR-5, two 1010 kVA DG sets on a synchronizing
+panel, and the 6HI, CCL line and CGL line PCCs, each with a transformer incomer and a DG incomer.
+To fill two weeks of demo history (with power cuts and DG runs): `python tools/seed_demo.py --config config.json`.
+
+**Demo power cut switch**: on the Plant page an admin sees a *Grid ON / OFF* lever (only with simulated meters).
+Switching it off cuts the grid: the HT panel goes dead, both DGs crank, synchronise and close on to the PCCs about
+12 seconds later, and the PCCs change over to DG. Switching it back on restores the grid, the PCCs change back and the
+DGs cool down for about a minute and stop. Everything is logged, the same as a real power cut.
+
+## Plant layout, DG sets, users and shifts
+
+- **Plant layout**: Settings → Plant layout lists the panels top to bottom. Under Machines and meters each meter gets
+  its panel, whether it is an incomer or a feeder, what feeds an incomer (a transformer feeder or a panel such as the
+  DG panel), and which panel a transformer feeder supplies. Only the grid incomer and the DGs count in the plant total.
+- **DG sets**: give the DG meter the picture *DG set / generator*. A DG counts as running when its frequency is above
+  40 Hz with voltage, or while it carries load. Diesel is an estimate from the usual generator fuel line
+  (litres per hour = 0.08145 × rated kW + 0.246 × kW output); set your own numbers and diesel price on the DG page.
+  Type the engine hour meter reading there once, so total run hours match the engine.
+- **Users**: roles are Admin (everything, plus settings) and Viewer (only the pages and panels ticked).
+- **Shifts**: Settings → Shifts. A night shift belongs to the date it starts. Reports → Show → Shift-wise.
 
 ## Your company's look
 
@@ -154,5 +184,7 @@ tests/          end-to-end and report tests:  python -m pytest -q tests
 
 - Register maps for Schneider EM6433/EM6436/EM3250, Rishabh 3430, L&T WL, ABB M4M, Socomec DIRIS A20.
 - Native installers (a Windows `.exe` service and a Mac app). For now the start scripts are used.
-- Email / SMS / WhatsApp alarm alerts, monthly bill-style reports, shift-wise (A/B/C) reports.
+- Email / SMS / WhatsApp alarm alerts, monthly bill-style reports.
+- The SLD PDF was cut off at the right edge: the Galvalume transformer (panel 7), the spare, the 5th 6HI feeder,
+  CCL feeders O/G-7 and O/G-8, and the 5th CGL feeder are guessed or left out. Contract demand (10,000 kVA) is a guess.
 - Production-per-tonne (kWh/ton) reports if furnace tonnage is entered.

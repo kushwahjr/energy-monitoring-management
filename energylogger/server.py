@@ -13,7 +13,7 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -23,11 +23,12 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth
 from .collector import Collector, check_alarms
-from .config import Alarms, Config, ConfigError, Meter, library_profiles, parse_config
+from .config import PAGES, Alarms, Config, ConfigError, Meter, is_dg, library_profiles, parse_config, parse_users
+from . import dg as dgmod
 from .db import Database
 from .params import PARAM_KEYS, PARAMS
 from .insights import analyse, ask_claude, tariff_from
-from .reports import daily_report, day_range
+from .reports import daily_report, day_range, parse_shifts, shift_report
 from .sync import CloudSyncer
 
 log = logging.getLogger("energylogger")
@@ -82,7 +83,8 @@ class App:
                 out.append({
                     "id": m.id, "name": m.name, "area": m.area, "plant_id": self.config.plant_id,
                     "plant_name": self.config.plant_name, "contract_kva": m.contract_kva, "is_main": m.is_main, "machine": m.machine,
-                    "picture_url": self.picture_url(m.id),
+                    "picture_url": self.picture_url(m.id), "is_dg": m.is_dg,
+                    "panel": m.panel, "position": m.position, "fed_from": m.fed_from, "feeds": m.feeds,
                     "enabled": m.enabled, "connection": port.kind, "profile": m.profile,
                     "online": bool(st and st.online), "last_seen": st.last_ok if st else None,
                     "error": st.last_error if st else None,
@@ -100,7 +102,12 @@ class App:
             meter = Meter(m["id"], m["name"], m["area"], "", 1, "", contract_kva=m["contract_kva"],
                           alarms=Alarms(**{k: v for k, v in alarms_cfg.items() if k in Alarms.__dataclass_fields__}))
             online = r is not None and now - r["ts"] < OFFLINE_AFTER
+            lay = json.loads(m["layout"] or "{}")
+            pre = f'{m["plant_id"]}.'
             out.append({
+                "panel": pre + lay["panel"] if lay.get("panel") else "", "position": lay.get("position") or ("incomer" if m["is_main"] else "feeder"),
+                "fed_from": pre + lay["fed_from"] if lay.get("fed_from") else "", "feeds": pre + lay["feeds"] if lay.get("feeds") else "",
+                "is_dg": not lay.get("fed_from") and is_dg(m["machine"], m["name"]),
                 "id": m["id"], "name": m["name"], "area": m["area"], "plant_id": m["plant_id"],
                 "plant_name": self.db.get_kv(f"plant_name:{m['plant_id']}", m["plant_id"]),
                 "contract_kva": m["contract_kva"], "is_main": bool(m["is_main"]), "machine": m["machine"], "enabled": True, "connection": "cloud",
@@ -116,6 +123,16 @@ class App:
             return None
         f = self.config.database.parent / "branding" / "machines" / name
         return f"/branding/machines/{name}?v={int(f.stat().st_mtime)}" if f.exists() else None
+
+    def panels(self) -> list[dict]:
+        if self.config.mode == "plant":
+            return self.config.panels
+        out = []
+        plants = sorted({m["plant_id"] for m in self.db.meters()})
+        for pl in plants:
+            for p in json.loads(self.db.get_kv(f"panels:{pl}", "[]")):
+                out.append({**p, "id": f"{pl}.{p['id']}", "plant_id": pl})
+        return out
 
     def meter_ids(self) -> list[str]:
         if self.config.mode == "plant":
@@ -136,12 +153,44 @@ def create_app(config_path: str | Path) -> FastAPI:
     api.state.app = state
 
     # ---------- login ----------
+    def is_local(request: Request) -> bool:
+        return bool(request.client and request.client.host in ("127.0.0.1", "::1"))
+
     def current_user(request: Request) -> dict | None:
+        """Signed-in user with their access, or None. Before the first admin is created, only the PC itself gets in."""
         cfg = state.config
         if not cfg.users:
-            return {"u": "local", "r": "admin" if request.client and request.client.host in ("127.0.0.1", "::1") else "viewer"}
+            if is_local(request):
+                return {"u": "local", "r": "admin", "name": "", "designation": "", "pages": list(PAGES), "panels": [], "setup": True}
+            return None
         token = request.cookies.get(COOKIE) or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-        return auth.read_token(cfg.secret_key, token) if token else None
+        data = auth.read_token(cfg.secret_key, token) if token else None
+        if not data:
+            return None
+        u = next((x for x in cfg.users if x.username == data.get("u")), None)
+        if u is None or not u.active:
+            return None
+        admin = u.role == "admin"
+        return {"u": u.username, "r": u.role, "name": u.name, "designation": u.designation,
+                "pages": list(PAGES) if admin else u.pages, "panels": [] if admin else u.panels}
+
+    def allowed_ids(user: dict) -> set[str] | None:
+        """Meter ids this user may see; None means all."""
+        if not user.get("panels"):
+            return None
+        want = set(user["panels"])
+        return {m["id"] for m in state.meter_list() if m.get("panel") in want}
+
+    def can_see(user: dict, meter_id: str) -> bool:
+        ids = allowed_ids(user)
+        return ids is None or meter_id in ids
+
+    def need_page(page: str):
+        def dep(user: dict = Depends(need_user)) -> dict:
+            if page not in user.get("pages", PAGES):
+                raise HTTPException(403, "Your account does not have access to this page. Ask an admin.")
+            return user
+        return dep
 
     def need_user(request: Request) -> dict:
         user = current_user(request)
@@ -151,13 +200,14 @@ def create_app(config_path: str | Path) -> FastAPI:
 
     def need_admin(user: dict = Depends(need_user)) -> dict:
         if user.get("r") != "admin":
-            raise HTTPException(403, "Only an admin can change settings. Without users in config.json, open the app on the plant PC itself.")
+            raise HTTPException(403, "Only an admin can do this.")
         return user
 
     @api.post("/api/login")
     async def login(body: dict, response: Response, request: Request):
         for u in state.config.users:
-            if u.username == body.get("username") and auth.verify_password(str(body.get("password", "")), u.password_hash):
+            if u.active and u.username == body.get("username") and auth.verify_password(str(body.get("password", "")), u.password_hash):
+                state.db.set_kv(f"last_login:{u.username}", str(int(time.time())))
                 token = auth.make_token(state.config.secret_key, u.username, u.role)
                 response.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=12 * 3600,
                                     secure=request.url.scheme == "https")
@@ -169,13 +219,26 @@ def create_app(config_path: str | Path) -> FastAPI:
         response.delete_cookie(COOKIE)
         return {"ok": True}
 
+    def cut_since():
+        p = state.collector.plant if state.collector else None
+        if p and p.cuts and p.cuts[-1][1] is None:
+            return p.cuts[-1][0]
+        return None
+
     @api.get("/api/info")
     async def info(request: Request):
         cfg = state.config
         user = current_user(request)
         return {
             "mode": cfg.mode, "plant_name": cfg.plant_name if cfg.mode == "plant" else state.raw.get("plant_name", "All plants"),
-            "login_required": bool(cfg.users), "user": user and {"username": user["u"], "role": user["r"]},
+            "login_required": bool(cfg.users), "setup_needed": not cfg.users, "setup_here": not cfg.users and is_local(request),
+            "user": user and {"username": user["u"], "role": user["r"], "name": user.get("name", ""), "designation": user.get("designation", ""),
+                              "pages": user.get("pages", list(PAGES)), "panels": user.get("panels", [])},
+            "panels": state.panels() if user else [],
+            "demo": bool(state.collector and state.collector.plant),
+            "grid_on": state.collector.plant.grid_on() if state.collector and state.collector.plant else None,
+            "cut_since": cut_since(),
+            "has_dg": any(m.get("is_dg") for m in state.meter_list()) if user else None,
             "params": PARAMS, "demand_block_minutes": cfg.demand_block_minutes,
             "poll_seconds": cfg.poll_seconds, "log_seconds": cfg.log_seconds,
             "timezone": str(state.tz), "cloud_sync": state.syncer.status if state.syncer else None,
@@ -323,27 +386,32 @@ def create_app(config_path: str | Path) -> FastAPI:
     # ---------- insights and AI advice ----------
     insight_cache: dict = {}
 
-    def insight_meters() -> list[dict]:
+    def insight_meters(user: dict | None = None) -> list[dict]:
+        ids = allowed_ids(user) if user else None
+        return [m for m in _insight_meters() if ids is None or m["id"] in ids]
+
+    def _insight_meters() -> list[dict]:
         if state.config.mode == "plant":
             return [{"id": m.id, "name": m.name, "area": m.area, "is_main": m.is_main, "contract_kva": m.contract_kva,
-                     "machine": m.machine} for m in state.config.meters if m.enabled]
+                     "machine": m.machine, "is_dg": m.is_dg} for m in state.config.meters if m.enabled]
         return [{"id": m["id"], "name": m["name"], "area": m["area"], "is_main": bool(m["is_main"]),
-                 "contract_kva": m["contract_kva"], "machine": m["machine"]} for m in state.db.meters()]
+                 "contract_kva": m["contract_kva"], "machine": m["machine"], "is_dg": not json.loads(m["layout"] or "{}").get("fed_from") and is_dg(m["machine"], m["name"])} for m in state.db.meters()]
 
-    async def current_analysis(fresh: bool = False) -> dict:
+    async def current_analysis(fresh: bool = False, user: dict | None = None) -> dict:
         import asyncio
-        key = json.dumps([state.raw.get("tariff"), [m["name"] for m in insight_meters()]], sort_keys=True)
-        hit = insight_cache.get("a")
+        ms = insight_meters(user)
+        key = json.dumps([state.raw.get("tariff"), [m["name"] for m in ms]], sort_keys=True)
+        hit = insight_cache.get(key)
         if not fresh and hit and hit[0] == key and time.time() - hit[1] < 300:
             return hit[2]
-        a = await asyncio.to_thread(analyse, insight_meters(), state.db, state.tz, state.raw.get("tariff"),
-                                    state.config.demand_block_minutes)
-        insight_cache["a"] = (key, time.time(), a)
+        a = await asyncio.to_thread(analyse, ms, state.db, state.tz, state.raw.get("tariff"),
+                                    state.config.demand_block_minutes, fuel=state.raw.get("dg_fuel"))
+        insight_cache[key] = (key, time.time(), a)
         return a
 
     @api.get("/api/insights")
-    async def insights(fresh: bool = False, _=Depends(need_user)):
-        return {**await current_analysis(fresh), "ai_enabled": bool(state.raw.get("ai", {}).get("api_key"))}
+    async def insights(fresh: bool = False, user=Depends(need_page("insights"))):
+        return {**await current_analysis(fresh, user), "ai_enabled": bool(state.raw.get("ai", {}).get("api_key"))}
 
     @api.put("/api/tariff")
     async def put_tariff(body: dict, _=Depends(need_admin)):
@@ -384,7 +452,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         return {"ai_enabled": bool(ai.get("api_key")), "model": ai.get("model", "claude-opus-5-5")}
 
     @api.post("/api/insights/ask")
-    async def ask(body: dict, _=Depends(need_user)):
+    async def ask(body: dict, user=Depends(need_page("insights"))):
         import asyncio
         ai = state.raw.get("ai", {})
         if not ai.get("api_key"):
@@ -392,7 +460,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         q = str(body.get("question", "")).strip()[:1000]
         if not q:
             raise HTTPException(400, "Type a question first")
-        a = await current_analysis()
+        a = await current_analysis(user=user)
         try:
             answer = await asyncio.to_thread(ask_claude, ai["api_key"], ai.get("model") or "claude-opus-5-5", a, q,
                                              state.raw.get("plant_name", ""))
@@ -404,13 +472,255 @@ def create_app(config_path: str | Path) -> FastAPI:
             raise HTTPException(502, f"Claude could not be reached: {msg[:300]}")
         return {"answer": answer}
 
+
+    # ---------- users and sign-in ----------
+    def user_public(u: dict) -> dict:
+        last = state.db.get_kv(f"last_login:{u['username']}", "")
+        return {"username": u["username"], "name": u.get("name", ""), "designation": u.get("designation", ""), "phone": u.get("phone", ""),
+                "role": u.get("role", "viewer"), "panels": u.get("panels", []), "pages": u.get("pages", list(PAGES)),
+                "active": u.get("active", True), "last_login": int(last) if last else None}
+
+    def clean_user(body: dict, old: dict | None) -> dict:
+        u = dict(old or {})
+        if old is None:
+            name = str(body.get("username", "")).strip().lower()
+            if not re.fullmatch(r"[a-z0-9._-]{3,32}", name):
+                raise HTTPException(400, "User ID: 3 to 32 letters, numbers, dots or dashes")
+            if any(x["username"] == name for x in state.raw.get("users", [])):
+                raise HTTPException(400, "That user ID is taken")
+            u["username"] = name
+        for k, n in (("name", 80), ("designation", 80), ("phone", 30)):
+            if k in body:
+                u[k] = str(body[k]).strip()[:n]
+        if "role" in body:
+            if body["role"] not in ("admin", "viewer"):
+                raise HTTPException(400, "Role must be admin or viewer")
+            u["role"] = body["role"]
+        if "panels" in body:
+            u["panels"] = [str(x) for x in body["panels"]][:100]
+        if "pages" in body:
+            u["pages"] = [x for x in body["pages"] if x in PAGES] or ["plant"]
+        if "active" in body:
+            u["active"] = bool(body["active"])
+        if body.get("password"):
+            if len(str(body["password"])) < 8:
+                raise HTTPException(400, "Password must be at least 8 characters")
+            u["password_hash"] = auth.hash_password(str(body["password"]))
+        if "password_hash" not in u:
+            raise HTTPException(400, "Set a password")
+        u.setdefault("role", "viewer")
+        return u
+
+    def save_users(users: list[dict]):
+        if not any(x.get("role") == "admin" and x.get("active", True) for x in users):
+            raise HTTPException(400, "Keep at least one active admin")
+        state.raw["users"] = users
+        if not state.raw.get("secret_key"):
+            import secrets
+            state.raw["secret_key"] = secrets.token_hex(32)
+        state.config.users = parse_users(users)
+        state.config.secret_key = state.raw["secret_key"]
+        save_raw()
+
+    @api.post("/api/setup")
+    async def setup(body: dict, request: Request, response: Response):
+        """First admin account. Only from the PC itself, and only while no user exists."""
+        if state.config.users:
+            raise HTTPException(400, "Already set up. Sign in instead.")
+        if not is_local(request):
+            raise HTTPException(403, "Create the first admin on the plant PC itself")
+        u = clean_user({**body, "role": "admin", "pages": list(PAGES), "panels": []}, None)
+        save_users([u])
+        token = auth.make_token(state.config.secret_key, u["username"], "admin")
+        response.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=12 * 3600, secure=request.url.scheme == "https")
+        return {"ok": True}
+
+    @api.get("/api/users")
+    async def list_users(_=Depends(need_admin)):
+        return {"users": [user_public(u) for u in state.raw.get("users", [])], "pages": list(PAGES), "panels": state.panels()}
+
+    @api.post("/api/users")
+    async def add_user(body: dict, _=Depends(need_admin)):
+        u = clean_user(body, None)
+        save_users([*state.raw.get("users", []), u])
+        return user_public(u)
+
+    @api.put("/api/users/{username}")
+    async def edit_user(username: str, body: dict, me=Depends(need_admin)):
+        users = list(state.raw.get("users", []))
+        i = next((i for i, x in enumerate(users) if x["username"] == username), None)
+        if i is None:
+            raise HTTPException(404, "No such user")
+        users[i] = clean_user(body, users[i])
+        save_users(users)
+        return user_public(users[i])
+
+    @api.delete("/api/users/{username}")
+    async def delete_user(username: str, me=Depends(need_admin)):
+        if username == me["u"]:
+            raise HTTPException(400, "You cannot remove your own account")
+        users = [x for x in state.raw.get("users", []) if x["username"] != username]
+        save_users(users)
+        return {"ok": True}
+
+    @api.post("/api/me/password")
+    async def my_password(body: dict, me=Depends(need_user)):
+        users = list(state.raw.get("users", []))
+        i = next((i for i, x in enumerate(users) if x["username"] == me["u"]), None)
+        if i is None:
+            raise HTTPException(400, "Create an admin account first")
+        if not auth.verify_password(str(body.get("old", "")), users[i]["password_hash"]):
+            raise HTTPException(400, "Current password is wrong")
+        users[i] = clean_user({"password": body.get("new", "")}, users[i])
+        save_users(users)
+        return {"ok": True}
+
+    # ---------- shifts ----------
+    @api.get("/api/shifts")
+    async def get_shifts(_=Depends(need_user)):
+        return {"shifts": [{k: v for k, v in x.items() if not k.startswith("_")} for x in parse_shifts(state.raw.get("shifts"))]}
+
+    @api.put("/api/shifts")
+    async def put_shifts(body: dict, _=Depends(need_admin)):
+        sh = parse_shifts(body.get("shifts"))
+        if len(sh) != len(body.get("shifts") or []):
+            raise HTTPException(400, "Each shift needs a name and times like 06:00")
+        state.raw["shifts"] = [{k: v for k, v in x.items() if not k.startswith("_")} for x in sh]
+        save_raw()
+        return {"shifts": state.raw["shifts"]}
+
+    @api.get("/api/reports/shifts")
+    async def report_shifts(start: str | None = None, end: str | None = None, meters: str | None = None, user=Depends(need_page("reports"))):
+        shifts = parse_shifts(state.raw.get("shifts"))
+        if not shifts:
+            raise HTTPException(400, "No shifts set yet. An admin can set them in Settings, Shifts.")
+        s, e = _parse_range(start, end)
+        ids = _ids(meters, user)
+        t0, t1 = day_range(s, e + timedelta(days=1), state.tz)  # a night shift ends the next morning
+        rows = state.db.readings(ids, t0, t1) if ids else []
+        out = [r for r in shift_report(rows, state.tz, shifts, state.config.demand_block_minutes) if s.isoformat() <= r["date"] <= e.isoformat()]
+        # DG hours and power cuts per shift
+        order = {x["name"]: i for i, x in enumerate(shifts)}
+        extra: dict = {}
+        fuel = dgmod.fuel_settings(state.raw.get("dg_fuel"))
+        for m in state.meter_list():
+            if not m.get("is_dg") or m["id"] not in ids:
+                continue
+            runs = dgmod.runs_for(state.db.readings([m["id"]], t0, t1), m.get("contract_kva"), state.config.log_seconds, fuel, time.time(), state.tz)
+            for r in runs:
+                k = shift_of_key(r["start"], shifts)
+                x = extra.setdefault(k, {"dg_seconds": 0, "dg_kwh": 0.0, "dg_fuel_l": 0.0})
+                x["dg_seconds"] += r["seconds"]; x["dg_kwh"] += r["kwh"]; x["dg_fuel_l"] += r["fuel_l"]
+        for c in dgmod.power_cuts([dict(e) for e in state.db.query("SELECT * FROM events WHERE kind='power_cut' AND ts >= ? AND ts < ?", (t0, t1))], state.tz):
+            k = shift_of_key(c["start"], shifts)
+            x = extra.setdefault(k, {"dg_seconds": 0, "dg_kwh": 0.0, "dg_fuel_l": 0.0})
+            x["cuts"] = x.get("cuts", 0) + 1
+            x["cut_seconds"] = x.get("cut_seconds", 0) + (c["seconds"] or 0)
+        return {"start": s.isoformat(), "end": e.isoformat(), "shifts": [{k: v for k, v in x.items() if not k.startswith("_")} for x in shifts],
+                "rows": sorted(out, key=lambda r: (r["date"], order.get(r["shift"], 99), r["meter_id"])),
+                "shift_extra": [{"date": k[0], "shift": k[1], **v} for k, v in sorted(extra.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1], 99)))
+                                if s.isoformat() <= k[0] <= e.isoformat()]}
+
+    def shift_of_key(ts: int, shifts: list[dict]) -> tuple[str, str]:
+        from .reports import shift_of
+        return shift_of(ts, state.tz, shifts)
+
+    # ---------- DG sets ----------
+    @api.get("/api/dg")
+    async def dg_status(days: int = 30, user=Depends(need_page("dg"))):
+        import asyncio
+        days = max(1, min(days, 400))
+        ids = allowed_ids(user)
+        dgs = [m for m in state.meter_list() if m.get("is_dg") and (ids is None or m["id"] in ids)]
+        fuel = dgmod.fuel_settings(state.raw.get("dg_fuel"))
+        now = time.time()
+        t0 = int(now - days * 86400)
+        today0 = int(datetime.combine(datetime.now(state.tz).date(), datetime.min.time(), state.tz).timestamp())
+        offsets = state.raw.get("dg_hours", {})
+
+        def work():
+            out, all_runs, per_day = [], [], {}
+            for m in dgs:
+                all_rows = state.db.query("SELECT ts, kw, kva, kwh, hz, v_ln, v_ll FROM readings WHERE meter_id = ? AND ts >= ? ORDER BY ts", (m["id"], t0))
+                runs = dgmod.runs_for(all_rows, m.get("contract_kva"), state.config.log_seconds, fuel, now, state.tz)
+                tot = state.db.query("SELECT ts, kw, kva, kwh, hz, v_ln, v_ll FROM readings WHERE meter_id = ? ORDER BY ts", (m["id"],)) if days < 400 else all_rows
+                logged_h = sum(r["seconds"] for r in dgmod.runs_for(tot, m.get("contract_kva"), state.config.log_seconds, fuel, now, state.tz)) / 3600
+                v = m.get("values") or {}
+                live_running = m["online"] and (((v.get("hz") or 0) > 40 and ((v.get("v_ln") or 0) > 50 or (v.get("v_ll") or 0) > 90)) or abs(v.get("kw") or 0) > 2)
+                since = state.collector.watch.dg_on.get(m["id"]) if state.collector else None
+                if live_running and not isinstance(since, (int, float)):
+                    since = runs[-1]["start"] if runs and runs[-1]["ongoing"] else None
+                d = dgmod.daily(runs, state.tz)
+                today = d.get(datetime.now(state.tz).date().isoformat(), {"seconds": 0, "kwh": 0, "fuel_l": 0, "starts": 0})
+                rated = m.get("contract_kva")
+                out.append({
+                    "id": m["id"], "name": m["name"], "rated_kva": rated, "picture_url": m.get("picture_url"), "machine": m.get("machine"),
+                    "status": "running" if live_running else ("stopped" if m["online"] else "offline"),
+                    "since": since if live_running else None, "error": m.get("error"),
+                    "values": v, "load_pct": round(abs(v.get("kva") or 0) / rated * 100, 1) if rated and live_running else None,
+                    "today": {k: (round(x, 1) if isinstance(x, float) else x) for k, x in today.items()},
+                    "last_start": runs[-1]["start"] if runs else None, "last_stop": next((r["end"] for r in reversed(runs) if r["end"]), None),
+                    "run_hours_total": round(float(offsets.get(m["id"], 0)) + logged_h, 1), "hour_meter_offset": float(offsets.get(m["id"], 0)),
+                    "period": {"seconds": sum(r["seconds"] for r in runs), "kwh": round(sum(r["kwh"] for r in runs), 1),
+                               "fuel_l": round(sum(r["fuel_l"] for r in runs), 1), "starts": len(runs)},
+                })
+                all_runs += [{**r, "meter_id": m["id"], "name": m["name"]} for r in runs]
+                for day, x in d.items():
+                    per_day.setdefault(day, {})[m["id"]] = {k: (round(y, 2) if isinstance(y, float) else y) for k, y in x.items()}
+            evs = [dict(e) for e in state.db.query("SELECT * FROM events WHERE ts >= ? AND kind IN ('power_cut', 'dg_run', 'changeover') ORDER BY ts", (t0,))]
+            cuts = dgmod.power_cuts(evs, state.tz)
+            for c in cuts:  # how fast the DGs picked up
+                st = next((e for e in evs if e["kind"] == "dg_run" and e["active"] and c["start"] <= e["ts"] <= c["start"] + 600), None)
+                c["dg_start_s"] = st["ts"] - c["start"] if st else None
+            return {"dgs": out, "runs": sorted(all_runs, key=lambda r: -r["start"])[:500], "daily": per_day, "power_cuts": cuts,
+                    "events": evs[-200:][::-1], "fuel": fuel, "days": days, "grid_on": state.collector.plant.grid_on() if state.collector and state.collector.plant else None}
+        return await asyncio.to_thread(work)
+
+    @api.put("/api/dg/settings")
+    async def dg_settings(body: dict, _=Depends(need_admin)):
+        f = dgmod.fuel_settings(state.raw.get("dg_fuel"))
+        try:
+            for k in dgmod.DEFAULT_FUEL:
+                if k in body:
+                    f[k] = float(body[k])
+                    if f[k] < 0:
+                        raise ValueError
+            hours = dict(state.raw.get("dg_hours", {}))
+            for k, v in (body.get("hour_meter_offset") or {}).items():
+                hours[str(k)] = max(0.0, float(v))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Use plain numbers")
+        state.raw["dg_fuel"] = f
+        state.raw["dg_hours"] = hours
+        save_raw()
+        insight_cache.clear()
+        return {"fuel": f, "dg_hours": hours}
+
+    # ---------- demo: grid power switch ----------
+    @api.post("/api/demo/grid")
+    async def demo_grid(body: dict, _=Depends(need_admin)):
+        if not (state.collector and state.collector.plant):
+            raise HTTPException(400, "The power cut switch is for the demo (simulated meters) only")
+        state.collector.plant.set_grid(bool(body.get("on")))
+        state.collector.wake()
+        return {"grid_on": state.collector.plant.grid_on(), "cut_since": cut_since()}
+
     # ---------- live data and history ----------
     @api.get("/api/meters")
-    async def meters(_=Depends(need_user)):
-        return {"time": time.time(), "meters": state.meter_list()}
+    async def meters(user=Depends(need_user)):
+        ids = allowed_ids(user)
+        ms = state.meter_list()
+        if state.collector:
+            for m in ms:
+                if m.get("is_dg"):
+                    t = state.collector.watch.dg_on.get(m["id"])
+                    m["running_since"] = t if isinstance(t, (int, float)) else None
+        return {"time": time.time(), "meters": ms if ids is None else [m for m in ms if m["id"] in ids]}
 
     @api.get("/api/history")
-    async def history(meter: str, param: str = "kw", hours: float = 24, _=Depends(need_user)):
+    async def history(meter: str, param: str = "kw", hours: float = 24, user=Depends(need_user)):
+        if not can_see(user, meter):
+            raise HTTPException(403, "Your account does not have access to this machine")
         if param not in PARAMS:
             raise HTTPException(400, f"unknown parameter {param}")
         end = int(time.time()) + 1
@@ -419,9 +729,10 @@ def create_app(config_path: str | Path) -> FastAPI:
         return {"meter": meter, "param": param, "points": [[r["t"], r["v"], r["lo"], r["hi"]] for r in rows]}
 
     @api.get("/api/events")
-    async def events(hours: float = 72, _=Depends(need_user)):
-        rows = state.db.events(int(time.time() - hours * 3600))
-        return {"events": [dict(r) for r in rows]}
+    async def events(hours: float = 72, user=Depends(need_page("alarms"))):
+        ids = allowed_ids(user)
+        rows = state.db.events(int(time.time() - hours * 3600), limit=500)
+        return {"events": [dict(r) for r in rows if ids is None or r["meter_id"] in ids]}
 
     # ---------- reports ----------
     def _parse_range(start: str | None, end: str | None) -> tuple[date, date]:
@@ -437,17 +748,20 @@ def create_app(config_path: str | Path) -> FastAPI:
             raise HTTPException(400, "pick a range of one year or less")
         return s, e
 
-    def _ids(meters: str | None) -> list[str]:
+    def _ids(meters: str | None, user: dict | None = None) -> list[str]:
         ids = state.meter_ids()
+        ok = allowed_ids(user) if user else None
+        if ok is not None:
+            ids = [i for i in ids if i in ok]
         if meters:
             want = set(meters.split(","))
             ids = [i for i in ids if i in want]
         return ids
 
     @api.get("/api/reports/daily")
-    async def report_daily(start: str | None = None, end: str | None = None, meters: str | None = None, _=Depends(need_user)):
+    async def report_daily(start: str | None = None, end: str | None = None, meters: str | None = None, user=Depends(need_user)):
         s, e = _parse_range(start, end)
-        ids = _ids(meters)
+        ids = _ids(meters, user)
         t0, t1 = day_range(s, e, state.tz)
         rows = state.db.readings(ids, t0, t1) if ids else []
         return {"start": s.isoformat(), "end": e.isoformat(), "block_minutes": state.config.demand_block_minutes,
@@ -455,9 +769,9 @@ def create_app(config_path: str | Path) -> FastAPI:
 
     @api.get("/api/export.csv")
     async def export_csv(start: str | None = None, end: str | None = None, meters: str | None = None,
-                         kind: str = "readings", _=Depends(need_user)):
+                         kind: str = "readings", user=Depends(need_page("reports"))):
         s, e = _parse_range(start, end)
-        ids = _ids(meters)
+        ids = _ids(meters, user)
         t0, t1 = day_range(s, e, state.tz)
         names = {m["id"]: m["name"] for m in state.meter_list()}
         buf = io.StringIO()
@@ -493,6 +807,9 @@ def create_app(config_path: str | Path) -> FastAPI:
             state.db.set_kv(f"plant_name:{plant}", str(body["plant_name"])[:200])
         for m in body.get("meters", [])[:1000]:
             state.db.upsert_meter({**m, "id": prefix + str(m["id"]), "plant_id": plant})
+        if isinstance(body.get("panels"), list):
+            state.db.set_kv(f"panels:{plant}", json.dumps([{k: str(p.get(k, ""))[:200] for k in ("id", "name", "voltage", "note")}
+                                                           for p in body["panels"][:100] if isinstance(p, dict) and p.get("id")]))
         readings = body.get("readings", [])[:10000]
         state.db.insert_many_readings([{**r, "meter_id": prefix + str(r["meter_id"])} for r in readings])
         events = body.get("events", [])[:10000]
@@ -524,7 +841,7 @@ def create_app(config_path: str | Path) -> FastAPI:
             raw["secret_key"] = state.raw["secret_key"]
         raw["users"] = state.raw.get("users", [])  # users are managed in config.json only
         raw["branding"] = state.raw.get("branding", {})  # managed on the Branding tab
-        for k in ("tariff", "ai"):  # managed on the Insights page
+        for k in ("tariff", "ai", "shifts", "dg_fuel", "dg_hours"):  # managed on their own pages
             if k in state.raw:
                 raw[k] = state.raw[k]
             else:

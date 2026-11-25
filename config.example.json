@@ -1,7 +1,7 @@
 {
   "mode": "plant",
   "plant_id": "plant1",
-  "plant_name": "Steel Plant - Unit 1",
+  "plant_name": "CRM Complex, Mangaon",
   "branding": {
     "company_name": "",
     "accent": "#ff7a1a",
@@ -40,173 +40,348 @@
   },
   "meters": [
     {
-      "id": "incomer",
+      "id": "ht_inc",
+      "name": "22 kV Incomer",
+      "area": "HT room",
+      "port": "sim",
+      "panel": "ht",
+      "position": "incomer",
+      "contract_kva": 10000,
+      "machine": "grid",
+      "alarms": {
+        "pf_min": 0.9
+      },
+      "is_main": true
+    },
+    {
+      "id": "tr1",
+      "name": "TR-1 6HI Drive",
+      "area": "Rolling mill",
+      "port": "sim",
+      "panel": "ht",
+      "position": "feeder",
+      "contract_kva": 3500,
       "machine": "transformer",
-      "name": "33kV Main Incomer",
-      "area": "Substation",
+      "alarms": {}
+    },
+    {
+      "id": "tr2",
+      "name": "TR-2 6HI Drive",
+      "area": "Rolling mill",
       "port": "sim",
-      "contract_kva": 5000,
-      "is_main": true,
+      "panel": "ht",
+      "position": "feeder",
+      "contract_kva": 3500,
+      "machine": "transformer",
+      "alarms": {}
+    },
+    {
+      "id": "tr3",
+      "name": "TR-3 6HI Auxiliary",
+      "area": "6HI mill",
+      "port": "sim",
+      "panel": "ht",
+      "position": "feeder",
+      "contract_kva": 3500,
+      "machine": "transformer",
+      "alarms": {},
+      "feeds": "pcc_6hi"
+    },
+    {
+      "id": "tr4",
+      "name": "TR-4 CCL Line",
+      "area": "CCL line",
+      "port": "sim",
+      "panel": "ht",
+      "position": "feeder",
+      "contract_kva": 3000,
+      "machine": "transformer",
+      "alarms": {},
+      "feeds": "pcc_ccl"
+    },
+    {
+      "id": "tr5",
+      "name": "TR-5 CGL Line",
+      "area": "CGL line",
+      "port": "sim",
+      "panel": "ht",
+      "position": "feeder",
+      "contract_kva": 3000,
+      "machine": "transformer",
+      "alarms": {},
+      "feeds": "pcc_cgl"
+    },
+    {
+      "id": "tr6",
+      "name": "TR-6 Galvalume Line",
+      "area": "Galvalume line",
+      "port": "sim",
+      "panel": "ht",
+      "position": "feeder",
+      "contract_kva": 3000,
+      "machine": "transformer",
+      "alarms": {},
+      "enabled": false
+    },
+    {
+      "id": "dg1",
+      "name": "DG-1",
+      "area": "DG area",
+      "port": "sim",
+      "panel": "dg",
+      "position": "incomer",
+      "contract_kva": 1010,
+      "machine": "dg_set",
       "alarms": {
-        "pf_min": 0.9,
-        "kva_max": 4800
+        "kva_max": 960
+      },
+      "is_main": true
+    },
+    {
+      "id": "dg2",
+      "name": "DG-2",
+      "area": "DG area",
+      "port": "sim",
+      "panel": "dg",
+      "position": "incomer",
+      "contract_kva": 1010,
+      "machine": "dg_set",
+      "alarms": {
+        "kva_max": 960
+      },
+      "is_main": true
+    },
+    {
+      "id": "hi_ic1",
+      "name": "6HI I/C-1 (TR-3)",
+      "area": "6HI mill",
+      "port": "sim",
+      "panel": "pcc_6hi",
+      "position": "incomer",
+      "contract_kva": 2000,
+      "machine": "pcc_panel",
+      "alarms": {},
+      "fed_from": "tr3"
+    },
+    {
+      "id": "hi_ic2",
+      "name": "6HI I/C-2 (DG)",
+      "area": "6HI mill",
+      "port": "sim",
+      "panel": "pcc_6hi",
+      "position": "incomer",
+      "contract_kva": 600,
+      "machine": "dg_incomer",
+      "alarms": {},
+      "fed_from": "dg"
+    },
+    {
+      "id": "hi_mill",
+      "name": "6HI Mill MCC",
+      "area": "6HI mill",
+      "port": "sim",
+      "panel": "pcc_6hi",
+      "position": "feeder",
+      "contract_kva": 900,
+      "machine": "cold_rolling_mill",
+      "alarms": {
+        "pf_min": 0.9
       }
     },
     {
+      "id": "hi_aux",
+      "name": "6HI Drives 415 V Aux",
+      "area": "6HI mill",
       "port": "sim",
-      "id": "cgl",
-      "name": "CGL Line",
-      "area": "Coating",
-      "machine": "cgl_line",
-      "contract_kva": 1600,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 1520
-      }
-    },
-    {
-      "port": "sim",
-      "id": "galvalume",
-      "name": "Galvalume Line",
-      "area": "Coating",
-      "machine": "galvalume_line",
-      "contract_kva": 1600,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 1520
-      }
-    },
-    {
-      "port": "sim",
-      "id": "ccl",
-      "name": "CCL Line",
-      "area": "Coating",
-      "machine": "ccl_line",
-      "contract_kva": 1000,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 950
-      }
-    },
-    {
-      "port": "sim",
-      "id": "pickling",
-      "name": "Pickling Line",
-      "area": "Cold Mill",
-      "machine": "pickling_line",
-      "contract_kva": 800,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 760
-      }
-    },
-    {
-      "port": "sim",
-      "id": "hr_slitter",
-      "name": "HR Slitter",
-      "area": "Finishing",
-      "machine": "hr_slitter",
+      "panel": "pcc_6hi",
+      "position": "feeder",
       "contract_kva": 400,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 380
-      }
+      "machine": "motor",
+      "alarms": {}
     },
     {
+      "id": "compressor",
+      "name": "Compressor",
+      "area": "6HI mill",
       "port": "sim",
-      "id": "cr_slitter",
-      "name": "CR Slitter",
-      "area": "Finishing",
-      "machine": "cr_slitter",
-      "contract_kva": 315,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 299
-      }
+      "panel": "pcc_6hi",
+      "position": "feeder",
+      "contract_kva": 350,
+      "machine": "compressor",
+      "alarms": {}
     },
     {
-      "port": "sim",
       "id": "trimming",
       "name": "Trimming Line",
-      "area": "Finishing",
-      "machine": "trimming_line",
+      "area": "6HI mill",
+      "port": "sim",
+      "panel": "pcc_6hi",
+      "position": "feeder",
       "contract_kva": 250,
+      "machine": "trimming_line",
+      "alarms": {}
+    },
+    {
+      "id": "ccl_ic1",
+      "name": "CCL I/C-1 (TR-4)",
+      "area": "CCL line",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "incomer",
+      "contract_kva": 1800,
+      "machine": "pcc_panel",
+      "alarms": {},
+      "fed_from": "tr4"
+    },
+    {
+      "id": "ccl_ic2",
+      "name": "CCL I/C-2 (DG)",
+      "area": "CCL line",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "incomer",
+      "contract_kva": 650,
+      "machine": "dg_incomer",
+      "alarms": {},
+      "fed_from": "dg"
+    },
+    {
+      "id": "ccl_mcc",
+      "name": "CCL Line MCC",
+      "area": "CCL line",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "feeder",
+      "contract_kva": 1000,
+      "machine": "ccl_line",
       "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 238
+        "pf_min": 0.9
       }
     },
     {
-      "port": "sim",
-      "id": "boiler",
-      "name": "Boiler",
-      "area": "Utilities",
-      "machine": "boiler",
-      "contract_kva": 300,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 285
-      }
-    },
-    {
-      "port": "sim",
-      "id": "etp",
-      "name": "ETP",
-      "area": "Utilities",
-      "machine": "etp",
-      "contract_kva": 160,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 152
-      }
-    },
-    {
-      "port": "sim",
       "id": "ro",
       "name": "RO Plant",
       "area": "Utilities",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "feeder",
+      "contract_kva": 100,
       "machine": "ro_plant",
-      "contract_kva": 100,
+      "alarms": {}
+    },
+    {
+      "id": "etp",
+      "name": "ETP Plant",
+      "area": "Utilities",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "feeder",
+      "contract_kva": 160,
+      "machine": "etp",
+      "alarms": {}
+    },
+    {
+      "id": "boiler",
+      "name": "Boiler",
+      "area": "Utilities",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "feeder",
+      "contract_kva": 300,
+      "machine": "boiler",
+      "alarms": {}
+    },
+    {
+      "id": "pump_house",
+      "name": "Pump House",
+      "area": "Utilities",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "feeder",
+      "contract_kva": 200,
+      "machine": "pump",
+      "alarms": {}
+    },
+    {
+      "id": "wtp",
+      "name": "WTP",
+      "area": "Utilities",
+      "port": "sim",
+      "panel": "pcc_ccl",
+      "position": "feeder",
+      "contract_kva": 120,
+      "machine": "wtp",
+      "alarms": {}
+    },
+    {
+      "id": "cgl_ic1",
+      "name": "CGL I/C-1 (TR-5)",
+      "area": "CGL line",
+      "port": "sim",
+      "panel": "pcc_cgl",
+      "position": "incomer",
+      "contract_kva": 1800,
+      "machine": "pcc_panel",
+      "alarms": {},
+      "fed_from": "tr5"
+    },
+    {
+      "id": "cgl_ic2",
+      "name": "CGL I/C-2 (DG)",
+      "area": "CGL line",
+      "port": "sim",
+      "panel": "pcc_cgl",
+      "position": "incomer",
+      "contract_kva": 650,
+      "machine": "dg_incomer",
+      "alarms": {},
+      "fed_from": "dg"
+    },
+    {
+      "id": "cgl_mcc",
+      "name": "CGL Line MCC",
+      "area": "CGL line",
+      "port": "sim",
+      "panel": "pcc_cgl",
+      "position": "feeder",
+      "contract_kva": 1100,
+      "machine": "cgl_line",
       "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 95
+        "pf_min": 0.9
       }
     },
     {
+      "id": "pickling",
+      "name": "Pickling Line",
+      "area": "CGL line",
       "port": "sim",
-      "id": "lpg",
-      "name": "LPG Yard",
-      "area": "Utilities",
-      "machine": "lpg_yard",
-      "contract_kva": 60,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 57
-      }
-    },
-    {
-      "port": "sim",
-      "id": "utility",
-      "name": "Utility",
-      "area": "Utilities",
-      "machine": "utility",
+      "panel": "pcc_cgl",
+      "position": "feeder",
       "contract_kva": 500,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 475
-      }
+      "machine": "pickling_line",
+      "alarms": {}
     },
     {
+      "id": "hr_slitter",
+      "name": "HR Slitter Line",
+      "area": "CGL line",
       "port": "sim",
-      "id": "workshop",
-      "name": "Workshop",
-      "area": "Services",
-      "machine": "workshop",
-      "contract_kva": 100,
-      "alarms": {
-        "pf_min": 0.85,
-        "kva_max": 95
-      }
+      "panel": "pcc_cgl",
+      "position": "feeder",
+      "contract_kva": 250,
+      "machine": "hr_slitter",
+      "alarms": {}
+    },
+    {
+      "id": "nitrogen",
+      "name": "Nitrogen Plant",
+      "area": "CGL line",
+      "port": "sim",
+      "panel": "pcc_cgl",
+      "position": "feeder",
+      "contract_kva": 300,
+      "machine": "oxygen_plant",
+      "alarms": {}
     },
     {
       "id": "rs485_example",
@@ -241,5 +416,54 @@
     "api_key": "",
     "sync_seconds": 30
   },
-  "profiles": {}
+  "profiles": {},
+  "panels": [
+    {
+      "id": "ht",
+      "name": "22 kV HT panel",
+      "voltage": "22 kV",
+      "note": "From the SLD, sheet 1. Panel 7 (Galvalume transformer) and the spare were cut off at the edge of the PDF, so they are guessed."
+    },
+    {
+      "id": "dg",
+      "name": "DG synchronizing panel",
+      "voltage": "415 V",
+      "note": "2 x 1010 kVA DG sets in parallel (SLD sheet 2)."
+    },
+    {
+      "id": "pcc_6hi",
+      "name": "6HI PCC",
+      "voltage": "415 V",
+      "note": "SLD sheet 5. The 5th outgoing feeder was cut off in the PDF."
+    },
+    {
+      "id": "pcc_ccl",
+      "name": "CCL line PCC",
+      "voltage": "415 V",
+      "note": "SLD sheet 3. Outgoing feeders 7 and 8 were cut off in the PDF."
+    },
+    {
+      "id": "pcc_cgl",
+      "name": "CGL line PCC",
+      "voltage": "415 V",
+      "note": "SLD sheet 4. The 5th outgoing feeder was cut off in the PDF."
+    }
+  ],
+  "shifts": [
+    {
+      "name": "A",
+      "start": "06:00",
+      "end": "14:00"
+    },
+    {
+      "name": "B",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "C",
+      "start": "22:00",
+      "end": "06:00"
+    }
+  ]
 }

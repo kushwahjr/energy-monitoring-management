@@ -30,6 +30,8 @@ class Database:
                 self.conn.execute("ALTER TABLE meters ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0")
             if "machine" not in have:
                 self.conn.execute("ALTER TABLE meters ADD COLUMN machine TEXT NOT NULL DEFAULT ''")
+            if "layout" not in have:
+                self.conn.execute("ALTER TABLE meters ADD COLUMN layout TEXT NOT NULL DEFAULT '{}'")
             self.conn.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, meter_id TEXT NOT NULL, kind TEXT NOT NULL,"
@@ -56,11 +58,13 @@ class Database:
         import json, time
         with self.lock, self.conn:
             self.conn.execute(
-                "INSERT INTO meters (id, plant_id, name, area, contract_kva, is_main, machine, alarms, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO meters (id, plant_id, name, area, contract_kva, is_main, machine, alarms, layout, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(id) DO UPDATE SET plant_id=excluded.plant_id, name=excluded.name, area=excluded.area,"
-                " contract_kva=excluded.contract_kva, is_main=excluded.is_main, machine=excluded.machine, alarms=excluded.alarms, updated=excluded.updated",
+                " contract_kva=excluded.contract_kva, is_main=excluded.is_main, machine=excluded.machine, alarms=excluded.alarms,"
+                " layout=excluded.layout, updated=excluded.updated",
                 (m["id"], m.get("plant_id", ""), m.get("name", m["id"]), m.get("area", ""), m.get("contract_kva"),
-                 int(bool(m.get("is_main"))), str(m.get("machine") or "")[:40], json.dumps(m.get("alarms", {})), int(time.time())),
+                 int(bool(m.get("is_main"))), str(m.get("machine") or "")[:40], json.dumps(m.get("alarms", {})),
+                 json.dumps({k: str(m.get(k) or "")[:40] for k in ("panel", "position", "fed_from", "feeds")}), int(time.time())),
             )
 
     def meters(self):

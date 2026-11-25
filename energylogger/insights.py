@@ -65,7 +65,7 @@ def _money(x: float | None, cur: str) -> str:
 
 
 def analyse(meters: list[dict], db, tz: ZoneInfo, tariff_raw: dict | None, block_minutes: int = 15,
-            days: int = 14, now: datetime | None = None) -> dict:
+            days: int = 14, now: datetime | None = None, fuel: dict | None = None) -> dict:
     """meters: [{id, name, area, is_main, contract_kva, machine}]. Looks at the last `days` days."""
     tariff = tariff_from(tariff_raw)
     cur = tariff["currency"]
@@ -129,8 +129,9 @@ def analyse(meters: list[dict], db, tz: ZoneInfo, tariff_raw: dict | None, block
                     "saving_month": round(saving) if saving else None})
 
     peak_list: list[tuple[dict, float]] = []
-    mains = [m for m in meters if m.get("is_main")] or []
-    feeders = [m for m in meters if not m.get("is_main")]
+    dgs = [m for m in meters if m.get("is_dg")]
+    mains = [m for m in meters if m.get("is_main") and not m.get("is_dg")]
+    feeders = [m for m in meters if not m.get("is_main") and not m.get("is_dg")]
     month = 30.0
 
     # ---- plant level: power factor and kVAh billing ----
@@ -254,6 +255,37 @@ def analyse(meters: list[dict], db, tz: ZoneInfo, tariff_raw: dict | None, block
                 add("low", "Electrical health", m, f"Voltage {v:.0f} V L-N on {m['name']}",
                     "Voltage is outside 220 to 250 V L-N. High voltage wastes energy in motors and lighting; low voltage raises current.",
                     "Adjust the transformer tap to bring voltage near 230 to 240 V.")
+
+    # ---- DG sets ----
+    if dgs:
+        from . import dg as dgmod
+        fs = dgmod.fuel_settings(fuel)
+        week_rows = defaultdict(list)
+        for r in rows:
+            if r["ts"] >= week_cut and r["meter_id"] in {d["id"] for d in dgs}:
+                week_rows[r["meter_id"]].append(r)
+        for d in dgs:
+            runs = dgmod.runs_for(week_rows.get(d["id"], []), d.get("contract_kva"), 60, fs, now.timestamp(), tz)
+            if not runs:
+                continue
+            hours = sum(r["seconds"] for r in runs) / 3600
+            kwh = sum(r["kwh"] for r in runs)
+            litres = sum(r["fuel_l"] for r in runs)
+            cost_kwh = litres * fs["diesel_price"] / kwh if kwh > 1 else None
+            loads = [r["avg_load_pct"] for r in runs if r["avg_load_pct"] is not None and r["seconds"] > 600]
+            avg_load = sum(loads) / len(loads) if loads else None
+            if avg_load is not None and avg_load < 30 and hours > 1:
+                add("medium", "DG set", d, f"{d['name']} runs at only {avg_load:.0f}% load",
+                    f"It ran {hours:.1f} hours this week at an average of {avg_load:.0f}% of its {d.get('contract_kva') or '?'} kVA rating. "
+                    "Below about 30% a diesel engine burns more fuel per kWh and builds up carbon (wet stacking).",
+                    "Run one DG instead of two in parallel at light load, and switch off non-essential loads during power cuts.",
+                    (litres * 0.15) * fs["diesel_price"] * 30 / 7)
+            grid_rate = tariff["energy_rate"]
+            if cost_kwh:
+                add("low", "DG set", d, f"{d['name']}: {hours:.1f} h run, {kwh:,.0f} kWh this week",
+                    f"Estimated {litres:,.0f} litres of diesel, about {cur}{cost_kwh:.1f} per kWh against {cur}{grid_rate} from the grid. "
+                    f"{len(runs)} start{'s' if len(runs) != 1 else ''} this week.",
+                    "Log fuel filled each week so the estimate can be checked; record the reason for each run (power cut, test, peak lopping).")
 
     if peak_list:
         peak_list.sort(key=lambda x: -x[1])

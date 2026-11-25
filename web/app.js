@@ -1,7 +1,7 @@
 "use strict";
 // Energy Monitoring Management dashboard. Plain JavaScript, no build step, works offline on the plant LAN.
 
-const S = { info: null, meters: [], timer: null, route: "", today: {}, settingsTab: "branding" };
+const S = { repTok: 0, info: null, meters: [], timer: null, route: "", today: {}, settingsTab: "branding" };
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const P = k => (S.info && S.info.params[k]) || { label: k, unit: "" };
@@ -52,33 +52,104 @@ async function boot() {
   try { S.info = await (await fetch("/api/info", { credentials: "same-origin" })).json(); }
   catch (e) { $("#view").innerHTML = `<p class="pad err">Can't reach the logging PC. Check that it is switched on and that this device is on the plant network.</p>`; return; }
   applyBranding();
-  if (S.info.login_required && !S.info.user) return showLogin();
+  if (S.info.setup_needed && !S.info.user) return showLogin();
+  if (S.info.setup_needed && S.info.setup_here) return showSetup();
+  if (!S.info.user) return showLogin();
   afterLogin();
 }
+
+const can = page => !S.info.user || (S.info.user.pages || []).includes(page);
 
 function afterLogin() {
   const u = S.info.user;
   $("#rail").hidden = false;
   $("#logoutBtn").hidden = !S.info.login_required;
   $("#navSettings").hidden = !(u && u.role === "admin");
+  document.querySelectorAll("#nav [data-page]").forEach(a => (a.hidden = !can(a.dataset.page)));
+  $("#navDg").hidden = $("#navDg").hidden || S.info.has_dg === false;
+  const chip = $("#meChip");
+  chip.hidden = !(u && S.info.login_required);
+  if (u) chip.innerHTML = `<span class="av">${esc((u.name || u.username || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</span><span><b>${esc(u.name || u.username)}</b><small>${esc(u.designation || (u.role === "admin" ? "Admin" : "Viewer"))}</small></span>`;
+  chip.onclick = changePassword;
+  window.removeEventListener("hashchange", route);
   window.addEventListener("hashchange", route);
   route();
 }
 
+function changePassword() {
+  const box = document.createElement("div");
+  box.className = "picker-back";
+  box.innerHTML = `<form class="picker small-dlg" id="pwForm"><div class="row picker-top"><h2>${esc(S.info.user.name || S.info.user.username)}</h2><div class="spacer"></div><button type="button" class="ghost" id="pwX" aria-label="Close">✕</button></div>
+    <div class="picker-body"><p class="hint">${esc(S.info.user.designation || "")} · signed in as ${esc(S.info.user.username)}</p>
+    <label class="f">Current password<input type="password" name="old" autocomplete="current-password" required></label>
+    <label class="f">New password (8 or more characters)<input type="password" name="new" autocomplete="new-password" minlength="8" required></label>
+    <div class="row" style="margin-top:14px"><button class="primary">Change password</button><div class="spacer"></div><button type="button" class="ghost" id="pwOut">Sign out</button></div></div></form>`;
+  document.body.appendChild(box);
+  const close = () => box.remove();
+  box.onclick = e => { if (e.target === box) close(); };
+  $("#pwX").onclick = close;
+  $("#pwOut").onclick = () => $("#logoutBtn").click();
+  $("#pwForm").onsubmit = async e => {
+    e.preventDefault();
+    try { await api("/api/me/password", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(e.target))) }); toast("Password changed."); close(); }
+    catch (err) { toast(err.message); }
+  };
+}
+
+const LOGIN_ART = `<svg class="login-art" viewBox="0 0 600 320" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <defs><linearGradient id="lgSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".18"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+  <rect width="600" height="320" fill="url(#lgSky)"/>
+  ${[60, 230, 400, 570].map(x => `<g class="pylon" transform="translate(${x} 80)"><path d="M0 0 -26 220M0 0 26 220M-30 40h60M-40 70h80M-20 120h40M-17 40 17 70M17 40-17 70M-12 120 22 220M12 120-22 220"/></g>`).join("")}
+  ${[[-30, 40], [30, 40], [-40, 70], [40, 70]].map(([dx, dy], i) => `<path class="line" d="M${60 + dx} ${80 + dy}Q${145} ${80 + dy + 30} ${230 + dx} ${80 + dy}Q${315} ${80 + dy + 30} ${400 + dx} ${80 + dy}Q${485} ${80 + dy + 30} ${570 + dx} ${80 + dy}"/>
+     <path class="spark" style="animation-delay:${-i * .7}s" d="M${60 + dx} ${80 + dy}Q${145} ${80 + dy + 30} ${230 + dx} ${80 + dy}Q${315} ${80 + dy + 30} ${400 + dx} ${80 + dy}Q${485} ${80 + dy + 30} ${570 + dx} ${80 + dy}"/>`).join("")}
+</svg>`;
+
+function loginShell(inner) {
+  const b = S.info.branding || {};
+  return `<div class="login-wrap"><div class="login-hero">${LOGIN_ART}<div class="login-hero-text"><span class="kicker">Energy Monitoring Management</span><h1>${esc(b.company_name || "Energy Monitoring")}</h1><p>${esc(S.info.plant_name || "")}</p></div></div>
+    <div class="login-card"><div class="brand">${b.logo_url ? `<img src="${esc(b.logo_url)}" alt="" style="max-height:52px;max-width:200px">` : `<span class="logo">${'<svg viewBox="0 0 64 64" width="40" height="40" aria-hidden="true"><path d="M36 6 16 36h14l-4 22 22-32H34z" fill="currentColor"/></svg>'}</span>`}</div>${inner}</div></div>`;
+}
+
+function showSetup() {
+  clearInterval(S.timer);
+  $("#rail").hidden = true;
+  $("#view").innerHTML = loginShell(`<form id="setupForm"><h2>Create the admin account</h2>
+    <p class="hint">First time on this PC. This person can add other users, set what each one sees, and change settings. After this, everyone signs in.</p>
+    <label class="f">Full name<input name="name" required autocomplete="name"></label>
+    <label class="f">Designation<input name="designation" placeholder="HOD Electrical" list="desigList"></label>
+    <label class="f">User ID<input name="username" required pattern="(?:[A-Za-z0-9._]|-){3,32}" autocomplete="username" placeholder="e.g. electrical.hod"></label>
+    <label class="f">Password (8 or more characters)<input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
+    <label class="f">Password again<input name="password2" type="password" minlength="8" required autocomplete="new-password"></label>
+    <p class="err" id="setupErr" hidden></p><button class="primary wide">Create and sign in</button></form>${DESIG_LIST}`);
+  $("#setupForm").onsubmit = async ev => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target)), err = $("#setupErr");
+    if (d.password !== d.password2) { err.hidden = false; err.textContent = "The two passwords are different."; return; }
+    const r = await fetch("/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(d) });
+    if (!r.ok) { err.hidden = false; err.textContent = (await r.json()).detail || "Could not create the account."; return; }
+    S.info = await (await fetch("/api/info")).json(); applyBranding(); afterLogin();
+  };
+}
+
+const DESIGNATIONS = ["Plant Head", "HOD Electrical", "Electrical Engineer", "Shift Engineer", "Shift In-charge", "Production Manager", "Maintenance Engineer", "Energy Manager", "Operator", "Management", "Auditor"];
+const DESIG_LIST = `<datalist id="desigList">${DESIGNATIONS.map(d => `<option value="${d}">`).join("")}</datalist>`;
+
 function showLogin() {
   clearInterval(S.timer);
   $("#rail").hidden = true;
-  const b = S.info.branding || {};
-  $("#view").innerHTML = `<form class="login" id="loginForm"><div class="panel">
-    <div class="brand">${b.logo_url ? `<img src="${esc(b.logo_url)}" alt="" style="max-height:48px;max-width:180px">` : ""}<span class="names"><b>${esc(b.company_name || "Energy Monitoring")}</b><small>${esc(S.info.plant_name || "")}</small></span></div>
-    <label class="f">Username<input name="username" autocomplete="username" required></label>
+  if (S.info.setup_needed && !S.info.setup_here) {
+    $("#view").innerHTML = loginShell(`<h2>Not set up yet</h2><p class="hint">The first admin account has to be created on the plant PC itself. Open this app there, then come back and sign in.</p>`);
+    return;
+  }
+  $("#view").innerHTML = loginShell(`<form id="loginForm"><h2>Sign in</h2><p class="hint">Use the user ID and password your admin gave you.</p>
+    <label class="f">User ID<input name="username" autocomplete="username" required autocapitalize="none"></label>
     <label class="f">Password<input name="password" type="password" autocomplete="current-password" required></label>
     <p class="err" id="loginErr" hidden></p>
-    <button class="primary">Sign in</button></div></form>`;
+    <button class="primary wide">Sign in</button></form>`);
   $("#loginForm").onsubmit = async ev => {
     ev.preventDefault();
     const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(ev.target))) });
-    if (!r.ok) { const e = $("#loginErr"); e.hidden = false; e.textContent = "Wrong username or password."; return; }
+    if (!r.ok) { const e = $("#loginErr"); e.hidden = false; e.textContent = "Wrong user ID or password."; return; }
     S.info = await (await fetch("/api/info")).json();
     applyBranding();
     afterLogin();
@@ -93,7 +164,13 @@ function route() {
   const [name, arg] = location.hash.replace(/^#\/?/, "").split("/");
   S.route = name || "overview";
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.route === (S.route === "meter" ? "overview" : S.route)));
-  const views = { overview: viewOverview, meter: () => viewMeter(decodeURIComponent(arg || "")), reports: viewReports, insights: viewInsights, events: viewEvents, settings: () => viewSettings() };
+  const views = { overview: viewOverview, meter: () => viewMeter(decodeURIComponent(arg || "")), reports: viewReports, insights: viewInsights, dg: viewDG, users: viewUsers, events: viewEvents, settings: () => viewSettings() };
+  const pageOf = { overview: "plant", meter: "plant", insights: "insights", dg: "dg", reports: "reports", events: "alarms" };
+  if (pageOf[S.route] && !can(pageOf[S.route])) {
+    const first = ["plant", "dg", "insights", "reports", "alarms"].find(can);
+    const to = { plant: "#/", dg: "#/dg", insights: "#/insights", reports: "#/reports", alarms: "#/events" }[first];
+    if (to && location.hash !== to) { location.hash = to; return; }
+  }
   (views[S.route] || viewOverview)();
   window.scrollTo(0, 0);
 }
@@ -115,60 +192,134 @@ function alarmsOf(ms) {
 function setAlarmCount(n) { const e = $("#alarmCount"); e.hidden = !n; e.textContent = n; }
 
 // ---------------- plant overview ----------------
+const BOLT = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>`;
+
 async function viewOverview() {
   const v = $("#view");
-  v.innerHTML = `<div class="readouts" id="ovRead"></div>
+  const admin = S.info.user && S.info.user.role === "admin";
+  v.innerHTML = `<div id="cutBanner"></div><div class="readouts" id="ovRead"></div>
     <section class="mimic-panel"><div class="mimic-head"><h2>${S.info.mode === "cloud" ? "All plants" : "Plant power"}</h2>
-      <div class="legend"><span class="l-on">Running</span><span class="l-alarm">Alarm</span><span class="l-off">No data</span></div></div>
+      <div class="legend"><span class="l-on">Grid power</span><span class="l-dg">DG power</span><span class="l-dead">No supply</span><span class="l-alarm">Alarm</span><span class="l-off">No data</span></div>
+      ${S.info.demo && admin ? `<button class="gridsw" id="gridSw" title="Demo only: cut or restore the grid supply"><span class="plate"><span class="lever"></span></span><span class="lbl"><b>GRID ON</b><small>Demo power cut switch</small></span></button>` : ""}</div>
       <div id="ovMimic"></div></section>
     <h2>Active alarms</h2><div id="ovAlarms"></div>`;
+  S.ov = { gridLive: null, cutAt: S.info.cut_since || null, restoredAt: null };
   const loadToday = async () => { try { S.today = Object.fromEntries((await api(`/api/reports/daily?start=${today()}`)).rows.map(r => [r.meter_id, r])); } catch (_) {} };
   const draw = async () => {
     try { S.meters = (await api("/api/meters")).meters; } catch (e) { if (e.message !== "login") v.innerHTML = `<p class="pad err">${esc(e.message)}</p>`; return; }
     if (S.route !== "overview") return;
     renderOverview();
   };
+  S.ovDraw = draw;
+  const sw = $("#gridSw");
+  if (sw) sw.onclick = async () => {
+    const on = sw.classList.contains("off");
+    sw.classList.toggle("off", !on);
+    try {
+      const r = await api("/api/demo/grid", { method: "POST", body: JSON.stringify({ on }) });
+      S.info.grid_on = r.grid_on; S.info.cut_since = r.cut_since;
+      toast(on ? "Grid supply restored. PCCs change back to the transformers, DGs cool down and stop." : "Grid supply cut. Watch the DGs start and the PCCs change over.");
+      setTimeout(draw, 350);
+    } catch (e) { toast(e.message); }
+  };
   await loadToday(); await draw(); refreshInfo();
   let n = 0;
-  S.timer = setInterval(async () => { if (++n % 12 === 0) { await loadToday(); refreshInfo(); } draw(); }, S.info.mode === "cloud" ? 15000 : 5000);
+  const every = S.info.mode === "cloud" ? 15000 : S.info.demo ? 2000 : 5000;
+  S.timer = setInterval(async () => { if (++n % Math.round(60000 / every) === 0) { await loadToday(); refreshInfo(); } draw(); }, every);
   let rt; window.onresize = () => { clearTimeout(rt); rt = setTimeout(renderOverview, 150); };
+}
+
+function powerFx(kind) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const fx = document.createElement("div");
+  fx.className = "bolt-fx" + (kind === "restore" ? " restore" : "");
+  if (kind === "cut") {
+    fx.innerHTML = `<svg viewBox="0 0 100 300" preserveAspectRatio="none"><path d="M58 0 40 92l22 6-30 92 20 4-26 106"/><path d="M40 92 18 130M62 98l20 40" style="stroke-width:3"/></svg>`;
+    document.body.classList.add("blackout");
+    setTimeout(() => document.body.classList.remove("blackout"), 1300);
+  }
+  document.body.appendChild(fx);
+  setTimeout(() => fx.remove(), 1400);
 }
 
 function renderOverview() {
   if (!$("#ovMimic")) return;
   const ms = S.meters.filter(m => m.enabled);
-  const mains = ms.filter(m => m.is_main), basis = mains.length ? mains : ms, ids = new Set(basis.map(m => m.id));
+  const live = m => m.online && ((m.values.v_ln || 0) > 50 || (m.values.v_ll || 0) > 90);
+  // someone who sees only some panels gets totals from the incomers of those panels
+  const incs = ms.filter(m => m.position === "incomer" && !m.is_dg);
+  const dgFed = m => ms.some(d => d.is_dg && (d.panel === m.fed_from || d.id === m.fed_from)) || /dg/i.test(m.fed_from || "");
+  let mains = ms.filter(m => m.is_main);
+  if (!mains.length) mains = incs;
+  const grids = mains.filter(m => !m.is_dg && !dgFed(m)), dgs = ms.filter(m => m.is_dg);
+  const basis = mains.length ? mains : ms, ids = new Set(basis.map(m => m.id));
   const on = basis.filter(m => m.online);
-  const sum = k => on.reduce((a, m) => a + (m.values[k] || 0), 0);
-  const kw = sum("kw"), kva = sum("kva"), pf = kva ? kw / kva : null;
+  const sum = (list, k) => list.reduce((a, m) => a + (m.values[k] || 0), 0);
+  const kw = sum(on, "kw"), kva = sum(on, "kva");
+  const gridOn = grids.filter(m => m.online);
+  const pf = sum(gridOn, "kva") ? sum(gridOn, "kw") / sum(gridOn, "kva") : kva ? kw / kva : null;
   const rows = Object.values(S.today).filter(r => ids.has(r.meter_id));
   const kwh = rows.reduce((a, r) => a + r.kwh, 0);
-  const md = rows.reduce((a, r) => Math.max(a, r.md_kva || 0), 0);
-  const contract = mains.reduce((a, m) => a + (m.contract_kva || 0), 0);
+  const gridIds = new Set(grids.map(m => m.id));
+  const md = Object.values(S.today).filter(r => gridIds.has(r.meter_id)).reduce((a, r) => Math.max(a, r.md_kva || 0), 0);
+  const contract = grids.reduce((a, m) => a + (m.contract_kva || 0), 0);
   const mdPct = contract ? md / contract : null;
-  const basisNote = mains.length ? (mains.length === 1 ? `at ${mains[0].name}` : `${mains.length} incomers`) : "all meters added";
+  const runningDgs = dgs.filter(m => live(m));
+  const gridLive = grids.length ? grids.some(live) : null;
   const pfMin = 0.9;
+  const supply = gridLive === false ? (runningDgs.length ? ["dg", `DG sets`, `${runningDgs.length} of ${dgs.length} running`] : ["bad", "No supply", "grid failed"])
+    : runningDgs.length ? ["dg", "Grid + DG", `${runningDgs.length} DG running`] : ["", "Grid", grids.length === 1 ? esc(grids[0].name) : `${grids.length} incomers`];
   $("#ovRead").innerHTML = `
-    <div class="readout"><div class="k">Plant load</div><div class="v">${fmtNum(kw, 0)}<small>kW</small></div><div class="s">${fmtNum(kva, 0)} kVA, ${esc(basisNote)}</div></div>
-    <div class="readout ${pf != null && pf < pfMin ? "warn" : ""}"><div class="k">Power factor</div><div class="v">${pf != null ? fmtNum(pf, 3) : "–"}</div><div class="s">${pf != null && pf < pfMin ? "Low, check capacitor banks" : "kW ÷ kVA"}</div></div>
+    <div class="readout ${supply[0] === "bad" ? "bad" : ""}"><div class="k">Supply</div><div class="v" style="${supply[0] === "dg" ? "color:var(--dg-c)" : ""}">${supply[1]}</div><div class="s">${supply[2]}</div></div>
+    <div class="readout"><div class="k">Plant load</div><div class="v">${fmtNum(kw, 0)}<small>kW</small></div><div class="s">${fmtNum(kva, 0)} kVA${dgs.length ? ", grid + DG" : ""}</div></div>
+    <div class="readout ${pf != null && pf < pfMin ? "warn" : ""}"><div class="k">Power factor</div><div class="v">${pf != null ? fmtNum(pf, 3) : "–"}</div><div class="s">${pf != null && pf < pfMin ? "Low, check capacitor banks" : "at the grid incomer"}</div></div>
     <div class="readout"><div class="k">Energy today</div><div class="v">${fmtNum(kwh, 0)}<small>kWh</small></div><div class="s">since midnight</div></div>
     <div class="readout ${mdPct > 0.95 ? "bad" : mdPct > 0.85 ? "warn" : ""}"><div class="k">Max demand today</div><div class="v">${fmtNum(md, 0)}<small>kVA</small></div>
       <div class="s">${contract ? `${fmtNum(mdPct * 100, 0)}% of ${fmtNum(contract, 0)} kVA contract` : `${S.info.demand_block_minutes}-minute average`}</div>
       ${contract ? `<div class="meterbar ${mdPct > 0.95 ? "bad" : mdPct > 0.85 ? "warn" : ""}"><i style="width:${Math.min(100, mdPct * 100)}%"></i></div>` : ""}</div>`;
 
+  // power cut: banner with a running timer, a flash when it happens, a green bar when it comes back
+  const o = S.ov || (S.ov = {});
+  if (gridLive !== null) {
+    if (o.gridLive === true && !gridLive) { o.cutAt = S.info.cut_since || Date.now() / 1000; powerFx("cut"); }
+    if (o.gridLive === false && gridLive) { o.restoredAt = Date.now() / 1000; o.lastCut = Date.now() / 1000 - (o.cutAt || Date.now() / 1000); o.cutAt = null; powerFx("restore"); }
+    if (!gridLive && !o.cutAt) o.cutAt = S.info.cut_since || Date.now() / 1000;
+    o.gridLive = gridLive;
+  }
+  const sw = $("#gridSw");
+  if (sw && !sw.matches(":active")) {
+    const off = gridLive === false;
+    sw.classList.toggle("off", off);
+    sw.querySelector("b").textContent = off ? "GRID OFF" : "GRID ON";
+    sw.querySelector("small").textContent = off ? "Click to restore supply" : "Demo: click to cut supply";
+  }
+  const cb = $("#cutBanner");
+  if (gridLive === false) {
+    const dgOnLoad = runningDgs.filter(m => (m.values.kw || 0) > 20);
+    const onDg = ms.filter(m => m.position === "incomer" && !m.is_dg && (m.values.kw || 0) > 1 && dgs.some(d => d.panel === m.fed_from || d.id === m.fed_from));
+    const what = dgOnLoad.length ? `${dgOnLoad.map(m => esc(m.name)).join(", ")} on load. ${onDg.length ? `Running on DG: ${onDg.map(m => esc(m.panel ? ((S.info.panels || []).find(p => p.id === m.panel) || {}).name || m.panel : m.name)).join(", ")}.` : ""}`
+      : runningDgs.length ? "DG sets started, synchronising…" : dgs.length ? "Waiting for the DG sets to start…" : "";
+    cb.innerHTML = `<div class="cut-banner ${dgOnLoad.length ? "on-dg" : ""}">${BOLT}<div><b>Grid power cut</b><small>${what || "Logged with start time. The stop time is logged when power returns."}</small></div><span class="tmr" data-since="${o.cutAt}">${fmtDur(Date.now() / 1000 - o.cutAt)}</span></div>`;
+  } else if (o.restoredAt && Date.now() / 1000 - o.restoredAt < 60) {
+    cb.innerHTML = `<div class="cut-banner restored">${BOLT}<div><b>Grid power restored</b><small>The cut lasted ${fmtDur(o.lastCut || 0)}. ${dgs.length ? "PCCs change back to the transformers; the DG sets cool down for about a minute and stop." : ""} It is in the DG page and Alarms.</small></div></div>`;
+  } else cb.innerHTML = "";
+
   if (!ms.length) {
     $("#ovMimic").innerHTML = `<p class="pad muted">No meters yet. ${S.info.mode === "plant" ? 'Add them in <a href="#/settings">Settings</a>.' : "Waiting for a plant PC to send data."}</p>`;
   } else if (S.info.mode === "cloud") {
-    // one diagram per plant
     const plants = {};
     for (const m of ms) (plants[m.plant_id] = plants[m.plant_id] || []).push(m);
-    $("#ovMimic").innerHTML = Object.entries(plants).map(([id, list]) => `<h3 class="muted" style="margin:10px 6px 0">${esc(list[0].plant_name)}</h3><div data-plant="${esc(id)}"></div>`).join("");
-    for (const [id, list] of Object.entries(plants)) drawMimic($(`[data-plant="${CSS.escape(id)}"]`), list, S.today, { supplyLabel: "Grid supply" });
+    const sig = Object.keys(plants).join(",");
+    if ($("#ovMimic").dataset.sig !== sig) {
+      $("#ovMimic").dataset.sig = sig;
+      $("#ovMimic").innerHTML = Object.entries(plants).map(([id, list]) => `<h3 class="muted" style="margin:10px 6px 6px">${esc(list[0].plant_name)}</h3><div data-plant="${esc(id)}"></div>`).join("");
+    }
+    for (const [id, list] of Object.entries(plants)) drawPlant($(`[data-plant="${CSS.escape(id)}"]`), list, S.today, S.info.panels || []);
   } else {
-    drawMimic($("#ovMimic"), ms, S.today, { supplyLabel: "Grid supply" });
+    drawPlant($("#ovMimic"), ms, S.today, S.info.panels || []);
   }
 
-  const al = alarmsOf(ms);
+  const al = alarmsOf(ms.filter(m => !(m.is_dg && !live(m) && m.online)));
   setAlarmCount(al.length);
   $("#ovAlarms").innerHTML = al.length
     ? `<ul class="alarm-list">${al.map(a => `<li><span class="dot ${a.kind === "off" ? "off" : ""}"></span><a href="#/meter/${encodeURIComponent(a.m.id)}"><b>${esc(a.m.name)}</b></a><span>${esc(a.text)}</span></li>`).join("")}</ul>`
@@ -455,7 +606,7 @@ async function viewReports() {
       <label class="f">From<input type="date" id="rStart" value="${daysAgo(6)}"></label>
       <label class="f">To<input type="date" id="rEnd" value="${today()}"></label>
       <label class="f">Machine<select id="rMeter"><option value="">All machines</option>${S.meters.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("")}</select></label>
-      <label class="f">Show<select id="rGroup"><option value="day">Each day, each machine</option><option value="meter">Total per machine</option></select></label>
+      <label class="f">Show<select id="rGroup"><option value="day">Each day, each machine</option><option value="meter">Total per machine</option><option value="shift">Shift-wise, plant totals</option><option value="shiftm">Shift-wise, each machine</option></select></label>
     </div><div class="row" style="margin-top:14px">
       <button class="primary" id="rRun">Show report</button><div class="spacer"></div>
       <button id="rCsvDaily">Download daily report (Excel)</button><button id="rCsvRaw">Download every reading (Excel)</button>
@@ -464,8 +615,11 @@ async function viewReports() {
   const q = () => `start=${$("#rStart").value}&end=${$("#rEnd").value}${$("#rMeter").value ? "&meters=" + encodeURIComponent($("#rMeter").value) : ""}`;
   const run = async () => {
     $("#rOut").innerHTML = `<p class="pad muted">Working…</p>`;
+    const tok = ++S.repTok;
+    if ($("#rGroup").value.startsWith("shift")) return runShift(tok);
     try {
       const r = await api(`/api/reports/daily?${q()}`);
+      if (tok !== S.repTok) return;  // a newer report was asked for
       let rows = r.rows;
       if ($("#rGroup").value === "meter") {
         const agg = {};
@@ -479,10 +633,174 @@ async function viewReports() {
       $("#rOut").innerHTML = dailyTable(rows);
     } catch (e) { $("#rOut").innerHTML = `<p class="pad err">${esc(e.message)}</p>`; }
   };
+  let shiftData = null;
+  const name = id => (S.meters.find(m => m.id === id) || {}).name || id;
+  const runShift = async tok => {
+    let got;
+    try { got = await api(`/api/reports/shifts?${q()}`); if (tok !== S.repTok) return; shiftData = got; } catch (e) {
+      $("#rOut").innerHTML = `<p class="pad err">${esc(e.message)}${S.info.user && S.info.user.role === "admin" ? ` <a href="#/settings" onclick="S.settingsTab='shifts'">Set shifts</a>` : ""}</p>`; return;
+    }
+    const r = shiftData, perMachine = $("#rGroup").value === "shiftm";
+    const mains = new Set(S.meters.filter(m => m.is_main).map(m => m.id)), grids = new Set(S.meters.filter(m => m.is_main && !m.is_dg).map(m => m.id));
+    const one = $("#rMeter").value;
+    const ex = Object.fromEntries(r.shift_extra.map(x => [x.date + "|" + x.shift, x]));
+    const shiftTime = Object.fromEntries(r.shifts.map(x => [x.name, `${x.start}–${x.end}`]));
+    if (perMachine || one) {
+      $("#rOut").innerHTML = `<table><thead><tr><th>Date</th><th>Shift</th><th>Machine</th><th class="n">kWh</th><th class="n">kVAh</th><th class="n">Avg PF</th><th class="n">Max demand kVA</th><th class="n">at</th><th class="n">Peak kW</th></tr></thead><tbody>
+        ${r.rows.map(x => `<tr><td>${x.date}</td><td><b>${esc(x.shift)}</b> <small class="muted">${shiftTime[x.shift] || ""}</small></td><td>${esc(name(x.meter_id))}</td><td class="n">${fmtNum(x.kwh, 1)}</td><td class="n">${fmtNum(x.kvah, 1)}</td><td class="n">${fmtNum(x.avg_pf, 3)}</td><td class="n">${fmtNum(x.md_kva, 1)}</td><td class="n">${x.md_kva_at || ""}</td><td class="n">${fmtNum(x.peak_kw, 1)}</td></tr>`).join("")}</tbody></table>`;
+      return;
+    }
+    // plant totals per shift: grid incomer(s) + DG
+    const agg = {};
+    for (const x of r.rows) {
+      if (mains.size && !mains.has(x.meter_id)) continue;
+      const k = x.date + "|" + x.shift;
+      const a = agg[k] = agg[k] || { date: x.date, shift: x.shift, kwh: 0, kvah: 0, grid_kwh: 0, md: 0, md_at: "", peak: 0 };
+      a.kwh += x.kwh; a.kvah += x.kvah; a.peak = Math.max(a.peak, x.peak_kw || 0);
+      if (grids.has(x.meter_id) || !mains.size) { a.grid_kwh += x.kwh; if ((x.md_kva || 0) > a.md) { a.md = x.md_kva; a.md_at = x.md_kva_at; } }
+    }
+    const list = Object.values(agg).sort((a, b) => a.date.localeCompare(b.date) || r.shifts.findIndex(s => s.name === a.shift) - r.shifts.findIndex(s => s.name === b.shift));
+    const tot = {}; // per shift name over the whole range
+    for (const a of list) { const e = ex[a.date + "|" + a.shift] || {}; const t = tot[a.shift] = tot[a.shift] || { kwh: 0, grid: 0, dg_s: 0, dg_kwh: 0, fuel: 0, cuts: 0, cut_s: 0, md: 0, n: 0 };
+      t.kwh += a.kwh; t.grid += a.grid_kwh; t.dg_s += e.dg_seconds || 0; t.dg_kwh += e.dg_kwh || 0; t.fuel += e.dg_fuel_l || 0; t.cuts += e.cuts || 0; t.cut_s += e.cut_seconds || 0; t.md = Math.max(t.md, a.md); t.n++; }
+    const maxK = Math.max(1, ...Object.values(tot).map(t => t.kwh / t.n));
+    $("#rOut").innerHTML = `<div class="shift-sum">${r.shifts.map(sh => { const t = tot[sh.name]; return t ? `<div class="readout"><div class="k">Shift ${esc(sh.name)} <small>${sh.start}–${sh.end}</small></div><div class="v">${fmtNum(t.kwh / t.n, 0)}<small>kWh / shift</small></div>
+        <div class="meterbar"><i style="width:${(t.kwh / t.n / maxK) * 100}%"></i></div><div class="s">${fmtNum(t.kwh, 0)} kWh in ${t.n} shifts · max demand ${fmtNum(t.md, 0)} kVA${t.cuts ? ` · ${t.cuts} power cuts, DG ${hrs(t.dg_s)} h` : ""}</div></div>` : ""; }).join("")}</div>
+      <table><thead><tr><th>Date</th><th>Shift</th><th class="n">Total kWh</th><th class="n">Grid kWh</th><th class="n">DG kWh</th><th class="n">Avg PF</th><th class="n">Max demand kVA</th><th class="n">at</th><th class="n">DG run h</th><th class="n">Diesel L</th><th class="n">Power cuts</th></tr></thead><tbody>
+      ${list.map(a => { const e = ex[a.date + "|" + a.shift] || {}; return `<tr><td>${a.date}</td><td><b>${esc(a.shift)}</b> <small class="muted">${shiftTime[a.shift] || ""}</small></td><td class="n">${fmtNum(a.kwh, 0)}</td><td class="n">${fmtNum(a.grid_kwh, 0)}</td><td class="n">${fmtNum(a.kwh - a.grid_kwh, 0)}</td>
+        <td class="n">${a.kvah ? fmtNum(a.kwh / a.kvah, 3) : "–"}</td><td class="n">${fmtNum(a.md, 0)}</td><td class="n">${a.md_at || ""}</td><td class="n">${e.dg_seconds ? hrs(e.dg_seconds) : "–"}</td><td class="n">${e.dg_fuel_l ? fmtNum(e.dg_fuel_l, 0) : "–"}</td>
+        <td class="n">${e.cuts ? `${e.cuts} <small class="muted">(${fmtDur(e.cut_seconds || 0)})</small>` : "–"}</td></tr>`; }).join("")}</tbody></table>`;
+    shiftData.list = list; shiftData.ex = ex;
+  };
   $("#rRun").onclick = run;
-  $("#rCsvDaily").onclick = () => (location.href = `/api/export.csv?kind=daily&${q()}`);
+  $("#rGroup").onchange = run;
+  $("#rCsvDaily").onclick = () => {
+    if (!$("#rGroup").value.startsWith("shift") || !shiftData) return (location.href = `/api/export.csv?kind=daily&${q()}`);
+    if ($("#rGroup").value === "shiftm" || $("#rMeter").value) return csvDownload(`shift-report-${shiftData.start}-${shiftData.end}.csv`, [["Date", "Shift", "Machine", "kWh", "kVAh", "Avg PF", "Max demand kVA", "at", "Peak kW"], ...shiftData.rows.map(x => [x.date, x.shift, name(x.meter_id), x.kwh.toFixed(1), x.kvah.toFixed(1), x.avg_pf != null ? x.avg_pf.toFixed(3) : "", x.md_kva != null ? x.md_kva.toFixed(1) : "", x.md_kva_at, x.peak_kw != null ? x.peak_kw.toFixed(1) : ""])]);
+    csvDownload(`shift-report-${shiftData.start}-${shiftData.end}.csv`, [["Date", "Shift", "Total kWh", "Grid kWh", "DG kWh", "Avg PF", "Max demand kVA", "at", "DG run h", "Diesel L", "Power cuts", "Cut minutes"],
+      ...shiftData.list.map(a => { const e = shiftData.ex[a.date + "|" + a.shift] || {}; return [a.date, a.shift, a.kwh.toFixed(0), a.grid_kwh.toFixed(0), (a.kwh - a.grid_kwh).toFixed(0), a.kvah ? (a.kwh / a.kvah).toFixed(3) : "", a.md.toFixed(0), a.md_at, ((e.dg_seconds || 0) / 3600).toFixed(2), (e.dg_fuel_l || 0).toFixed(0), e.cuts || 0, ((e.cut_seconds || 0) / 60).toFixed(1)]; })]);
+  };
   $("#rCsvRaw").onclick = () => (location.href = `/api/export.csv?kind=readings&${q()}`);
   run();
+}
+
+// ---------------- DG sets ----------------
+const csvDownload = (name, rows) => {
+  const txt = rows.map(r => r.map(c => { const v = c == null ? "" : String(c); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; }).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + txt], { type: "text/csv" }));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+const hrs = s => (s == null ? "–" : fmtNum(s / 3600, s < 36000 ? 2 : 1));
+const tsTxt = t => (t ? new Date(t * 1000).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "–");
+
+async function viewDG() {
+  const v = $("#view");
+  const admin = S.info.user && S.info.user.role === "admin";
+  S.dgDays = S.dgDays || 30;
+  v.innerHTML = `<h1>DG sets</h1><p class="lede">Live status, start and stop times, run hours, energy generated and diesel used, worked out from the DG meters. Every grid power cut is logged too.</p>
+    <div id="dgLive" class="dg-grid"></div>
+    <div class="row" style="margin:22px 0 10px;gap:10px;flex-wrap:wrap"><h2 style="margin:0">History</h2><div class="seg" id="dgRange">${[[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"]].map(([d, l]) => `<button data-d="${d}" class="${d === S.dgDays ? "on" : ""}">${l}</button>`).join("")}</div>
+      <div class="spacer"></div><button id="dgCsv">Download run log (Excel)</button>${admin ? `<button id="dgSet">Fuel and hour meter settings</button>` : ""}</div>
+    <div class="readouts" id="dgSum"></div>
+    <h2>Run hours per day</h2><div class="panel" id="dgDaily"></div>
+    <h2>Power cuts</h2><div class="table-wrap" id="dgCuts"></div>
+    <h2>Run log</h2><div class="table-wrap" id="dgRuns"></div>`;
+  let data = null, built = "";
+  const live = () => {
+    const el = $("#dgLive");
+    if (!el || !data) return;
+    if (!data.dgs.length) { el.innerHTML = `<p class="muted">No DG meter yet. In Settings, give the DG's meter the picture "DG set / generator".</p>`; return; }
+    const sig = data.dgs.map(d => d.id).join();
+    if (built !== sig) {
+      el.innerHTML = data.dgs.map(d => `<section class="dg-card" data-dg="${esc(d.id)}"><div class="dg-pic dg-off" data-art>${dgArt(96)}</div><div class="dg-info" data-info></div></section>`).join("");
+      built = sig;
+    }
+    for (const d of data.dgs) {
+      const card = el.querySelector(`[data-dg="${CSS.escape(d.id)}"]`), vv = d.values || {};
+      const st = d.status !== "running" ? (d.status === "offline" ? "nodata" : "off") : (vv.hz || 0) < 47 ? "cranking" : (d.load_pct || 0) < 5 ? "idle" : "loaded";
+      $("[data-art]", card).className = `dg-pic dg-${st}`;
+      card.className = `dg-card dgc-${st}`;
+      const label = { off: "Stopped", nodata: "No data", cranking: "Cranking", idle: "Running, no load", loaded: "Running on load" }[st];
+      $("[data-info]", card).innerHTML = `<div class="row" style="gap:10px;align-items:baseline"><h3>${esc(d.name)}</h3><span class="muted">${d.rated_kva ? fmtNum(d.rated_kva, 0) + " kVA" : ""}</span></div>
+        <div class="dg-state"><span class="pill p-${st === "loaded" ? "flow" : st === "off" ? "" : st === "nodata" ? "nodata" : "idle"} src-dg">${label}</span>
+          ${d.since ? `<span class="dg-timer">for <b class="tmr" data-since="${d.since}">${fmtDur(Date.now() / 1000 - d.since)}</b></span><span class="muted">since ${tsTxt(d.since)}</span>` : d.last_stop ? `<span class="muted">Last stopped ${tsTxt(d.last_stop)}</span>` : ""}</div>
+        <dl class="dg-kv">
+          <div><dt>Load</dt><dd>${d.status === "running" ? `${fmtNum(vv.kw || 0, 0)} <small>kW</small>` : "–"}</dd></div>
+          <div><dt>Load %</dt><dd>${d.load_pct != null ? `${fmtNum(d.load_pct, 0)}<small>%</small>` : "–"}</dd></div>
+          <div><dt>Voltage</dt><dd>${d.status === "running" ? `${fmtNum(vv.v_ll || (vv.v_ln || 0) * 1.732, 0)} <small>V</small>` : "–"}</dd></div>
+          <div><dt>Frequency</dt><dd>${d.status === "running" ? `${fmtNum(vv.hz || 0, 2)} <small>Hz</small>` : "–"}</dd></div>
+          <div><dt>Run today</dt><dd>${fmtDur(d.today.seconds || 0)}</dd></div>
+          <div><dt>Energy today</dt><dd>${fmtNum(d.today.kwh || 0, 0)} <small>kWh</small></dd></div>
+          <div><dt>Diesel today (est.)</dt><dd>${fmtNum(d.today.fuel_l || 0, 0)} <small>L</small></dd></div>
+          <div><dt>Starts today</dt><dd>${d.today.starts || 0}</dd></div>
+          <div><dt>Last start</dt><dd class="sm">${tsTxt(d.last_start)}</dd></div>
+          <div><dt>Last stop</dt><dd class="sm">${d.since ? "running now" : tsTxt(d.last_stop)}</dd></div>
+          <div><dt>Total run hours</dt><dd>${fmtNum(d.run_hours_total, 1)} <small>h</small></dd></div>
+        </dl>${d.error && d.status === "offline" ? `<p class="err">${esc(d.error)}</p>` : ""}`;
+    }
+  };
+  const history = () => {
+    const f = data.fuel, P = data.dgs.reduce((a, d) => ({ s: a.s + d.period.seconds, k: a.k + d.period.kwh, l: a.l + d.period.fuel_l, n: a.n + d.period.starts }), { s: 0, k: 0, l: 0, n: 0 });
+    const cuts = data.power_cuts, cutS = cuts.reduce((a, c) => a + (c.seconds || 0), 0);
+    $("#dgSum").innerHTML = `
+      <div class="readout"><div class="k">Run hours</div><div class="v">${hrs(P.s)}<small>h</small></div><div class="s">all DG sets, ${P.n} starts</div></div>
+      <div class="readout"><div class="k">Energy from DG</div><div class="v">${fmtNum(P.k, 0)}<small>kWh</small></div><div class="s">last ${data.days} days</div></div>
+      <div class="readout"><div class="k">Diesel used (est.)</div><div class="v">${fmtNum(P.l, 0)}<small>L</small></div><div class="s">≈ ₹${fmtNum(P.l * f.diesel_price, 0)} at ₹${fmtNum(f.diesel_price, 0)}/L</div></div>
+      <div class="readout"><div class="k">DG cost per unit</div><div class="v">${P.k ? "₹" + fmtNum((P.l * f.diesel_price) / P.k, 1) : "–"}</div><div class="s">diesel only, per kWh</div></div>
+      <div class="readout"><div class="k">Power cuts</div><div class="v">${cuts.length}</div><div class="s">${fmtDur(cutS)} without grid in total</div></div>`;
+    // run hours per day, one bar per DG
+    const days = Object.keys(data.daily).sort().slice(-Math.min(data.days, 31));
+    const max = Math.max(1, ...days.map(dy => Math.max(...Object.values(data.daily[dy]).map(x => x.seconds))));
+    $("#dgDaily").innerHTML = days.length ? `<div class="dgbars">${days.map(dy => `<div class="dgday" title="${dy}"><div class="bars">${data.dgs.map(d => {
+      const x = data.daily[dy][d.id]; return `<i style="height:${x ? Math.max(2, (x.seconds / max) * 100) : 0}%" title="${esc(d.name)}: ${x ? hrs(x.seconds) + " h, " + fmtNum(x.kwh, 0) + " kWh, " + x.starts + " starts" : "not run"}"></i>`; }).join("")}</div><span>${dy.slice(8)}</span></div>`).join("")}</div>
+      <p class="hint">Highest day: ${hrs(max)} h. Hover a bar for run hours, kWh and starts. ${data.dgs.length > 1 ? data.dgs.map((d, i) => `<span class="dgkey k${i}">${esc(d.name)}</span>`).join(" ") : ""}</p>` : `<p class="muted">The DG sets have not run in this period.</p>`;
+    $("#dgCuts").innerHTML = cuts.length ? `<table><thead><tr><th>Power cut at</th><th>Power back at</th><th class="n">Duration</th><th class="n">DG on in</th></tr></thead><tbody>
+      ${cuts.map(c => `<tr><td>${c.start_text}</td><td>${c.end_text || `<span class="badge bad">Still off</span>`}</td><td class="n">${c.seconds != null ? fmtDur(c.seconds) : `<span class="tmr" data-since="${c.start}"></span>`}</td><td class="n">${c.dg_start_s != null ? c.dg_start_s + " s" : "–"}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="pad muted">No grid power cuts in this period.</p>`;
+    $("#dgRuns").innerHTML = data.runs.length ? `<table><thead><tr><th>DG</th><th>Started</th><th>Stopped</th><th class="n">Run time</th><th class="n">kWh</th><th class="n">Avg kW</th><th class="n">Max kW</th><th class="n">Avg load</th><th class="n">Diesel L (est.)</th><th class="n">Cost ₹</th></tr></thead><tbody>
+      ${data.runs.map(r => `<tr><td>${esc(r.name)}</td><td>${r.start_text}</td><td>${r.ongoing ? `<span class="badge ok">Running</span>` : r.end_text}</td><td class="n">${fmtDur(r.seconds)}</td><td class="n">${fmtNum(r.kwh, 0)}</td>
+      <td class="n">${fmtNum(r.avg_kw, 0)}</td><td class="n">${fmtNum(r.max_kw, 0)}</td><td class="n">${r.avg_load_pct != null ? fmtNum(r.avg_load_pct, 0) + "%" : "–"}</td><td class="n">${fmtNum(r.fuel_l, 1)}</td><td class="n">${fmtNum(r.fuel_cost, 0)}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="pad muted">No DG runs in this period.</p>`;
+    document.querySelectorAll("#dgCuts .tmr").forEach(t => (t.textContent = fmtDur(Date.now() / 1000 - +t.dataset.since)));
+  };
+  const load = async (full = true) => {
+    try { data = await api(`/api/dg?days=${S.dgDays}`); } catch (e) { if (e.message !== "login" && $("#dgLive")) $("#dgLive").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+    if (S.route !== "dg") return;
+    live(); if (full) history();
+  };
+  $("#dgRange").onclick = e => { const b = e.target.closest("button"); if (!b) return; S.dgDays = +b.dataset.d; $("#dgRange").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); load(); };
+  $("#dgCsv").onclick = () => data && csvDownload(`dg-run-log-${today()}.csv`, [["DG", "Started", "Stopped", "Run time (h)", "kWh", "Avg kW", "Max kW", "Avg load %", "Diesel L (est.)", "Cost Rs"],
+    ...data.runs.map(r => [r.name, r.start_text, r.ongoing ? "running" : r.end_text, (r.seconds / 3600).toFixed(2), r.kwh, r.avg_kw, r.max_kw, r.avg_load_pct, r.fuel_l, r.fuel_cost]),
+    [], ["Power cut at", "Power back at", "Duration (min)", "DG on in (s)"], ...data.power_cuts.map(c => [c.start_text, c.end_text || "still off", c.seconds != null ? (c.seconds / 60).toFixed(1) : "", c.dg_start_s])]);
+  if (admin) $("#dgSet").onclick = () => data && dgSettings(data, () => load());
+  await load();
+  let n = 0;
+  S.timer = setInterval(() => load(++n % 6 === 0), S.info.demo ? 4000 : 10000);
+}
+
+function dgSettings(data, done) {
+  const f = data.fuel, box = document.createElement("div");
+  box.className = "picker-back";
+  box.innerHTML = `<form class="picker small-dlg" id="dgForm" style="width:min(560px,100%)"><div class="row picker-top"><h2>Fuel and hour meter</h2><div class="spacer"></div><button type="button" class="ghost" id="dgX" aria-label="Close">✕</button></div>
+    <div class="picker-body"><p class="hint">Diesel is estimated from run time and kWh with the usual generator fuel line: litres per hour = idle part × rated kW + part per kWh × output. Set the numbers from your DG's fuel log or OEM sheet for better figures.</p>
+    <div class="form"><label class="f">Diesel price ₹/L<input name="diesel_price" type="number" step="0.01" value="${f.diesel_price}"></label>
+    <label class="f">Idle part, L/h per rated kW<input name="idle_l_per_h_per_kw" type="number" step="0.0001" value="${f.idle_l_per_h_per_kw}"></label>
+    <label class="f">Part per kWh, L/kWh<input name="l_per_kwh" type="number" step="0.001" value="${f.l_per_kwh}"></label></div>
+    <h3 style="margin-top:18px">Engine hour meter</h3><p class="hint">Type what the DG's own hour meter shows now, so total run hours match it. Hours run from now on are added automatically.</p>
+    <div class="form">${data.dgs.map(d => `<label class="f">${esc(d.name)} hour meter now<input type="number" step="0.1" data-hm="${esc(d.id)}" data-logged="${d.run_hours_total - d.hour_meter_offset}" value="${d.run_hours_total}"></label>`).join("")}</div>
+    <p class="err" id="dgErr"></p><div class="row"><button class="primary">Save</button></div></div></form>`;
+  document.body.appendChild(box);
+  const close = () => box.remove();
+  box.onclick = e => { if (e.target === box) close(); };
+  $("#dgX").onclick = close;
+  $("#dgForm").onsubmit = async e => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target)), hm = {};
+    box.querySelectorAll("[data-hm]").forEach(i => (hm[i.dataset.hm] = Math.max(0, +i.value - +i.dataset.logged)));
+    try { await api("/api/dg/settings", { method: "PUT", body: JSON.stringify({ ...Object.fromEntries(Object.entries(fd).map(([k, x]) => [k, +x])), hour_meter_offset: hm }) }); toast("Saved."); close(); done(); }
+    catch (err) { $("#dgErr").textContent = err.message; }
+  };
 }
 
 // ---------------- alarms / events ----------------
@@ -561,6 +879,102 @@ function wireBranding() {
   };
 }
 
+// ---------------- users and access ----------------
+const PAGE_LABEL = { plant: "Plant", dg: "DG sets", insights: "Insights", reports: "Reports", alarms: "Alarms" };
+function viewUsers() { S.settingsTab = "users"; viewSettings(); }
+
+async function usersTab(el) {
+  let d;
+  try { d = await api("/api/users"); } catch (e) { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const pname = id => (d.panels.find(p => p.id === id) || {}).name || id;
+  el.innerHTML = `<p class="lede">Only people with an account can open this app. For each person, choose what they can see: which pages and which panels' machines. Admins see everything and can change settings.</p>
+    <div class="row" style="margin-bottom:12px"><button class="primary" id="uAdd">Add a person</button></div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>Designation</th><th>User ID</th><th>Access</th><th>Can see</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+    ${d.users.map(u => `<tr class="${u.active ? "" : "muted"}"><td><b>${esc(u.name || "–")}</b>${u.phone ? `<br><small class="muted">${esc(u.phone)}</small>` : ""}</td><td>${esc(u.designation || "–")}</td><td>${esc(u.username)}</td>
+      <td>${u.role === "admin" ? `<span class="badge ok">Admin</span>` : `<span class="badge">Viewer</span>`}${u.active ? "" : ` <span class="badge bad">Blocked</span>`}</td>
+      <td style="white-space:normal;max-width:340px">${u.role === "admin" ? "Everything" : `${u.pages.map(p => PAGE_LABEL[p] || p).join(", ")}<br><small class="muted">${u.panels.length ? "Panels: " + u.panels.map(pname).map(esc).join(", ") : "All panels"}</small>`}</td>
+      <td>${u.last_login ? tsTxt(u.last_login) : "never"}</td><td><button data-edit="${esc(u.username)}">Edit</button></td></tr>`).join("")}</tbody></table></div>`;
+  const form = u => {
+    const box = document.createElement("div");
+    box.className = "picker-back";
+    const isNew = !u;
+    u = u || { role: "viewer", pages: ["plant", "dg", "reports", "alarms"], panels: [], active: true };
+    box.innerHTML = `<form class="picker" id="uForm" style="height:auto;max-height:92vh;width:min(640px,100%)"><div class="row picker-top"><h2>${isNew ? "Add a person" : esc(u.name || u.username)}</h2><div class="spacer"></div><button type="button" class="ghost" id="uX" aria-label="Close">✕</button></div>
+      <div class="picker-body"><div class="form" style="margin-top:12px">
+        <label class="f">Full name<input name="name" value="${esc(u.name || "")}" required></label>
+        <label class="f">Designation<input name="designation" value="${esc(u.designation || "")}" list="desigList" placeholder="Shift Engineer"></label>
+        <label class="f">Phone<input name="phone" value="${esc(u.phone || "")}" inputmode="tel"></label>
+        <label class="f">User ID<input name="username" value="${esc(u.username || "")}" ${isNew ? "" : "readonly"} required pattern="(?:[A-Za-z0-9._]|-){3,32}" autocapitalize="none"></label>
+        <label class="f">${isNew ? "Password" : "New password (leave empty to keep)"}<input name="password" type="password" minlength="8" ${isNew ? "required" : ""} autocomplete="new-password"></label>
+        <label class="f">Access<select name="role"><option value="viewer">Viewer (sees data only)</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>Admin (sees all, changes settings)</option></select></label>
+      </div>
+      <div id="uScope" ${u.role === "admin" ? "hidden" : ""}>
+        <h3>Pages</h3><div class="chips">${d.pages.map(p => `<label class="chk"><input type="checkbox" name="pages" value="${p}" ${u.pages.includes(p) ? "checked" : ""}>${PAGE_LABEL[p] || p}</label>`).join("")}</div>
+        <h3>Panels</h3><p class="hint">Leave all unticked to show every panel. Tick panels to show only the machines on them, for example only the CCL line PCC for the CCL in-charge.</p>
+        <div class="chips">${d.panels.map(p => `<label class="chk"><input type="checkbox" name="panels" value="${esc(p.id)}" ${u.panels.includes(p.id) ? "checked" : ""}>${esc(p.name)}</label>`).join("") || `<span class="muted">No panels set up yet.</span>`}</div>
+      </div>
+      <label class="chk" style="margin-top:14px"><input type="checkbox" name="active" ${u.active ? "checked" : ""}> Account active (untick to block sign-in)</label>
+      <p class="err" id="uErr"></p>
+      <div class="row" style="margin-top:8px"><button class="primary">${isNew ? "Add" : "Save"}</button><div class="spacer"></div>${isNew || u.username === S.info.user.username ? "" : `<button type="button" class="danger ghost" id="uDel">Remove this person</button>`}</div>
+      </div></form>${DESIG_LIST}`;
+    document.body.appendChild(box);
+    const close = () => box.remove();
+    box.onclick = e => { if (e.target === box) close(); };
+    $("#uX").onclick = close;
+    $("[name=role]", box).onchange = e => ($("#uScope").hidden = e.target.value === "admin");
+    if ($("#uDel")) $("#uDel").onclick = async () => {
+      if ($("#uDel").dataset.sure !== "1") { $("#uDel").dataset.sure = "1"; $("#uDel").textContent = "Click again to remove"; return; }
+      try { await api(`/api/users/${encodeURIComponent(u.username)}`, { method: "DELETE" }); close(); toast("Removed."); usersTab(el); } catch (err) { $("#uErr").textContent = err.message; }
+    };
+    $("#uForm").onsubmit = async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = { name: fd.get("name"), designation: fd.get("designation"), phone: fd.get("phone"), role: fd.get("role"), pages: fd.getAll("pages"), panels: fd.getAll("panels"), active: fd.get("active") === "on" };
+      if (fd.get("password")) body.password = fd.get("password");
+      if (body.role === "viewer" && !body.pages.length) { $("#uErr").textContent = "Tick at least one page."; return; }
+      try {
+        if (isNew) await api("/api/users", { method: "POST", body: JSON.stringify({ ...body, username: fd.get("username") }) });
+        else await api(`/api/users/${encodeURIComponent(u.username)}`, { method: "PUT", body: JSON.stringify(body) });
+        close(); toast(isNew ? `Added. Give ${body.name || "them"} the user ID and password.` : "Saved."); usersTab(el);
+      } catch (err) { $("#uErr").textContent = err.message; }
+    };
+  };
+  $("#uAdd").onclick = () => form(null);
+  el.querySelectorAll("[data-edit]").forEach(b => (b.onclick = () => form(d.users.find(u => u.username === b.dataset.edit))));
+}
+
+// ---------------- shifts ----------------
+const SHIFT_PRESETS = {
+  "3 shifts of 8 h": [["A", "06:00", "14:00"], ["B", "14:00", "22:00"], ["C", "22:00", "06:00"]],
+  "2 shifts of 12 h": [["Day", "08:00", "20:00"], ["Night", "20:00", "08:00"]],
+  "General + 2 shifts": [["A", "06:00", "14:00"], ["General", "09:00", "18:00"], ["B", "14:00", "22:00"]],
+};
+async function shiftsTab(el) {
+  let sh;
+  try { sh = (await api("/api/shifts")).shifts; } catch (e) { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const draw = () => {
+    el.innerHTML = `<p class="lede">Set your shifts. Reports then show energy, maximum demand, power factor, DG hours and power cuts for each shift separately. A night shift that runs past midnight belongs to the day it starts.</p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px"><span class="hint">Start from:</span>${Object.keys(SHIFT_PRESETS).map(k => `<button data-pre="${esc(k)}">${esc(k)}</button>`).join("")}</div>
+      <div class="table-wrap"><table class="shift-tbl"><thead><tr><th>Shift name</th><th>Starts</th><th>Ends</th><th>Hours</th><th></th></tr></thead><tbody>
+      ${sh.map((x, i) => {
+        const [a, b] = [x.start, x.end].map(t => { const [h, m] = (t || "0:0").split(":"); return +h * 60 + +m; });
+        return `<tr data-i="${i}"><td><input data-f="name" value="${esc(x.name)}" maxlength="20"></td><td><input type="time" data-f="start" value="${esc(x.start)}"></td><td><input type="time" data-f="end" value="${esc(x.end)}"></td><td class="n">${fmtNum((((b - a) + 1440) % 1440 || 1440) / 60, 1)}</td><td><button class="ghost danger" data-del="${i}">Remove</button></td></tr>`;
+      }).join("") || `<tr><td colspan="5" class="muted">No shifts yet.</td></tr>`}</tbody></table></div>
+      <div class="row" style="margin-top:12px"><button id="shAdd">Add shift</button><div class="spacer"></div><span class="err" id="shErr"></span><button class="primary" id="shSave">Save shifts</button></div>`;
+    const read = () => { sh = [...el.querySelectorAll("tr[data-i]")].map(tr => Object.fromEntries([...tr.querySelectorAll("[data-f]")].map(i => [i.dataset.f, i.value.trim()]))); };
+    el.querySelectorAll("[data-f]").forEach(i => (i.onchange = () => { read(); draw(); }));
+    el.querySelectorAll("[data-pre]").forEach(b => (b.onclick = () => { sh = SHIFT_PRESETS[b.dataset.pre].map(([name, start, end]) => ({ name, start, end })); draw(); }));
+    el.querySelectorAll("[data-del]").forEach(b => (b.onclick = () => { read(); sh.splice(+b.dataset.del, 1); draw(); }));
+    $("#shAdd").onclick = () => { read(); const last = sh.at(-1); sh.push({ name: String.fromCharCode(65 + sh.length), start: last ? last.end : "06:00", end: last ? last.start : "14:00" }); draw(); };
+    $("#shSave").onclick = async () => {
+      read();
+      try { sh = (await api("/api/shifts", { method: "PUT", body: JSON.stringify({ shifts: sh }) })).shifts; toast("Shifts saved. See them in Reports, Shift-wise."); draw(); }
+      catch (e) { $("#shErr").textContent = e.message; }
+    };
+  };
+  draw();
+}
+
 async function viewSettings(preloaded) {
   const v = $("#view");
   let data = preloaded;
@@ -568,7 +982,10 @@ async function viewSettings(preloaded) {
   const cfg = data.config;
   cfg.ports = cfg.ports || {}; cfg.meters = cfg.meters || []; cfg.profiles = cfg.profiles || {}; cfg.cloud_sync = cfg.cloud_sync || { url: "", api_key: "", sync_seconds: 30 };
   const plant = S.info.mode === "plant";
-  const tabs = plant ? [["branding", "Branding"], ["meters", "Machines and meters"], ["logging", "Logging and cloud"]] : [["branding", "Branding"]];
+  const tabs = plant ? [["branding", "Branding"], ["users", "Users and access"], ["shifts", "Shifts"], ["layout", "Plant layout (panels)"], ["meters", "Machines and meters"], ["logging", "Logging and cloud"]]
+    : [["branding", "Branding"], ["users", "Users and access"], ["shifts", "Shifts"]];
+  const ownSave = ["branding", "users", "shifts"];
+  cfg.panels = cfg.panels || [];
   if (!tabs.some(t => t[0] === S.settingsTab)) S.settingsTab = "branding";
 
   const STATUS = { manufacturer_checked: "", manufacturer_checked_tcp: "", partly_checked: " (check energy)", manufacturer_partly_checked: " (check energy)", third_party: " (not yet confirmed)" };
@@ -606,7 +1023,11 @@ async function viewSettings(preloaded) {
       <label class="f">Meter model<select data-k="profile">${profileNames().map(p => `<option value="${esc(p)}" ${m.profile === p ? "selected" : ""}>${esc(modelLabel(p))}</option>`).join("")}</select></label>
       <label class="f">Modbus address (slave ID)<input data-k="unit_id" type="number" min="1" max="247" value="${m.unit_id ?? 1}"></label>
       <label class="f">Contract demand kVA<input data-k="contract_kva" type="number" value="${m.contract_kva ?? ""}"></label>
-      <label class="f">Position on diagram<select data-k="is_main"><option value="false">Feeder (below the busbar)</option><option value="true" ${m.is_main ? "selected" : ""}>Main incomer (counts in plant total)</option></select></label>
+      <label class="f">Panel<select data-k="panel"><option value="">Main bus</option>${cfg.panels.map(p => `<option value="${esc(p.id)}" ${m.panel === p.id ? "selected" : ""}>${esc(p.name || p.id)}</option>`).join("")}</select></label>
+      <label class="f">Position on panel<select data-k="position"><option value="feeder">Outgoing feeder (below the bus)</option><option value="incomer" ${(m.position || (m.is_main ? "incomer" : "")) === "incomer" ? "selected" : ""}>Incomer (above the bus)</option></select></label>
+      <label class="f">Plant total<select data-k="is_main"><option value="false">Not counted (avoids double counting)</option><option value="true" ${m.is_main ? "selected" : ""}>Counted (main grid incomer or DG)</option></select></label>
+      <label class="f">Incomer fed from<select data-k="fed_from"><option value="">Grid / not set</option>${cfg.panels.map(p => `<option value="${esc(p.id)}" ${m.fed_from === p.id ? "selected" : ""}>${esc(p.name || p.id)} bus</option>`).join("")}${cfg.meters.filter(x => x.id && x.id !== m.id).map(x => `<option value="${esc(x.id)}" ${m.fed_from === x.id ? "selected" : ""}>${esc(x.name || x.id)}</option>`).join("")}</select></label>
+      <label class="f">Feeder supplies panel<select data-k="feeds"><option value="">None (a machine)</option>${cfg.panels.map(p => `<option value="${esc(p.id)}" ${m.feeds === p.id ? "selected" : ""}>${esc(p.name || p.id)}</option>`).join("")}</select></label>
       <label class="f">Logging<select data-k="enabled"><option value="true" ${m.enabled !== false ? "selected" : ""}>On</option><option value="false" ${m.enabled === false ? "selected" : ""}>Off</option></select></label>
     </div>
     <details style="margin-top:10px"><summary>Alarm limits</summary><div class="form" style="margin-top:8px">
@@ -627,6 +1048,13 @@ async function viewSettings(preloaded) {
     <p class="hint">To add another model, paste its register map from the meter's Modbus manual as JSON. Example: {"my_meter": {"register_type": "holding", "word_order": "big", "registers": {"kw": {"address": 3060, "type": "float32"}}}}</p>
     <textarea id="sProfiles" rows="6">${esc(JSON.stringify(cfg.profiles, null, 2))}</textarea>`;
 
+  const layoutTab = () => `<p class="lede">The panels of your single-line diagram, top to bottom: for example the HT panel, the DG panel, then each PCC. Then, under Machines and meters, put each meter on its panel as an incomer or a feeder.</p>
+    <div id="sPanels">${cfg.panels.map((p, i) => `<div class="settings-item" data-panel="${i}"><div class="row"><b>${esc(p.name || p.id || "New panel")}</b><div class="spacer"></div>
+      <button class="ghost" data-up="${i}" ${i ? "" : "disabled"} aria-label="Move up">↑</button><button class="ghost" data-down="${i}" ${i < cfg.panels.length - 1 ? "" : "disabled"} aria-label="Move down">↓</button><button class="danger ghost" data-del-panel="${i}">Remove</button></div>
+      <div class="form"><label class="f">Panel ID<input data-p="id" value="${esc(p.id || "")}" placeholder="pcc_ccl"></label><label class="f">Name<input data-p="name" value="${esc(p.name || "")}" placeholder="CCL line PCC"></label>
+      <label class="f">Voltage<input data-p="voltage" value="${esc(p.voltage || "")}" placeholder="433 V"></label><label class="f" style="grid-column:span 2">Note<input data-p="note" value="${esc(p.note || "")}"></label></div></div>`).join("")}</div>
+    <button id="sAddPanel">Add panel</button>`;
+
   const loggingTab = () => `<div class="panel"><div class="form">
       <label class="f">Plant ID (for cloud)<input id="sPlantId" value="${esc(cfg.plant_id || "plant1")}"></label>
       <label class="f">Read meters every (s)<input id="sPoll" type="number" min="1" value="${cfg.poll_seconds ?? 5}"></label>
@@ -643,8 +1071,8 @@ async function viewSettings(preloaded) {
   const tab = S.settingsTab;
   v.innerHTML = `<h1>Settings</h1>
     <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</button>`).join("")}</div>
-    <div id="tabBody">${tab === "branding" ? brandingTab(cfg) : tab === "meters" ? metersTab() : loggingTab()}</div>
-    ${tab !== "branding" ? `<div class="row" style="margin:20px 0 40px"><button class="primary" id="sSave">Save and restart logging</button><span class="err" id="sErr"></span></div>` : ""}`;
+    <div id="tabBody">${tab === "branding" ? brandingTab(cfg) : tab === "users" || tab === "shifts" ? `<p class="muted">Loading…</p>` : tab === "meters" ? metersTab() : tab === "layout" ? layoutTab() : loggingTab()}</div>
+    ${!ownSave.includes(tab) ? `<div class="row" style="margin:20px 0 40px"><button class="primary" id="sSave">Save and restart logging</button><span class="err" id="sErr"></span></div>` : ""}`;
 
   const readPorts = () => {
     if (!$("#sPorts")) return cfg.ports;
@@ -667,6 +1095,7 @@ async function viewSettings(preloaded) {
   const collect = () => {
     const out = { ...cfg, ports: readPorts(), profiles: readProfiles() };
     if ($("#sMeters")) out.meters = [...v.querySelectorAll("[data-meter]")].map(readMeter);
+    if ($("#sPanels")) out.panels = [...v.querySelectorAll("[data-panel]")].map(el => Object.fromEntries([...el.querySelectorAll("[data-p]")].map(i => [i.dataset.p, i.value.trim()])));
     if ($("#sPoll")) Object.assign(out, { plant_id: $("#sPlantId").value, poll_seconds: +$("#sPoll").value, log_seconds: +$("#sLog").value, demand_block_minutes: +$("#sBlock").value,
       cloud_sync: { url: $("#sCloudUrl").value.trim(), api_key: $("#sCloudKey").value.trim(), sync_seconds: +$("#sCloudEvery").value } });
     return out;
@@ -674,8 +1103,17 @@ async function viewSettings(preloaded) {
   const keep = () => { try { Object.assign(cfg, collect()); return true; } catch (e) { toast("Meter models JSON: " + e.message); return false; } };
   const redraw = () => { data.config = cfg; viewSettings(data); };
 
-  v.querySelectorAll("[data-tab]").forEach(b => (b.onclick = () => { if (tab !== "branding" && !keep()) return; S.settingsTab = b.dataset.tab; redraw(); }));
+  v.querySelectorAll("[data-tab]").forEach(b => (b.onclick = () => { if (!ownSave.includes(tab) && !keep()) return; S.settingsTab = b.dataset.tab; redraw(); }));
   if (tab === "branding") return wireBranding();
+  if (tab === "users") return usersTab($("#tabBody"));
+  if (tab === "shifts") return shiftsTab($("#tabBody"));
+  if (tab === "layout") {
+    $("#sAddPanel").onclick = () => { if (!keep()) return; cfg.panels.push({ id: "panel" + (cfg.panels.length + 1), name: "", voltage: "", note: "" }); redraw(); };
+    const mv = (i, d) => { if (!keep()) return; const [x] = cfg.panels.splice(i, 1); cfg.panels.splice(i + d, 0, x); redraw(); };
+    v.querySelectorAll("[data-up]").forEach(b => (b.onclick = () => mv(+b.dataset.up, -1)));
+    v.querySelectorAll("[data-down]").forEach(b => (b.onclick = () => mv(+b.dataset.down, 1)));
+    v.querySelectorAll("[data-del-panel]").forEach(b => (b.onclick = () => { if (!keep()) return; cfg.panels.splice(+b.dataset.delPanel, 1); redraw(); }));
+  }
 
   if (tab === "meters") {
     const showFor = el => { const kind = $("[data-k=kind]", el).value; el.querySelectorAll("[data-for]").forEach(f => (f.hidden = !f.dataset.for.split(" ").includes(kind))); };

@@ -6,6 +6,9 @@ window.MACHINES = {
   // Power
   transformer: { group: "Power", label: "Transformer / incomer", svg: `<circle cx="32" cy="24" r="13"/><circle cx="32" cy="40" r="13"/><path d="M32 4v7M32 53v7"/>` },
   dg_set: { group: "Power", label: "DG set / generator", svg: `<circle cx="32" cy="32" r="22"/><path d="M40 24c-3-4-12-5-15 2s0 14 7 14c5 0 8-3 8-8h-8"/>` },
+  grid: { group: "Power", label: "Grid supply / HT incomer", svg: `<path d="M32 4 18 60M32 4l14 56M12 16h40M16 28h32M22 44h20M24 16l16 12M40 16 24 28M22 28l20 16M42 28 22 44"/><path d="M8 16v5M56 16v5M12 28v5M52 28v5" class="hot"/>` },
+  pcc_panel: { group: "Power", label: "PCC / MCC panel", svg: `<rect x="8" y="6" width="48" height="52" rx="3"/><path d="M24 6v52M40 6v52"/><path d="M12 14h8M28 14h8M44 14h8" class="hot"/><circle cx="16" cy="28" r="3"/><circle cx="32" cy="28" r="3"/><circle cx="48" cy="28" r="3"/><path d="M12 42h8M28 42h8M44 42h8M12 48h8M28 48h8M44 48h8"/>` },
+  dg_incomer: { group: "Power", label: "DG incomer (breaker)", svg: `<circle cx="32" cy="16" r="12"/><path d="M36 12c-1-2-6-3-7 1s1 6 3 6c2 0 4-1 4-3h-3"/><path d="M32 28v8M32 56v4"/><circle cx="32" cy="38" r="2.5"/><circle cx="32" cy="54" r="2.5"/><path d="M32 54 24 40" class="hot"/>` },
   capacitor: { group: "Power", label: "Capacitor bank / APFC", svg: `<path d="M32 4v20M32 40v20M14 24h36M14 40h36"/>` },
   // Coating lines
   cgl_line: { group: "Coating lines", label: "CGL line (galvanizing)", svg: `<circle cx="9" cy="18" r="6"/><path d="M15 18h7v22c0 7 18 7 18 0V12h9"/><circle cx="55" cy="18" r="6"/><path d="M16 34h30v22H16z"/><path d="M16 40h30" class="hot"/><text x="23" y="53" font-size="9" font-weight="700" stroke="none" fill="currentColor">GI</text>` },
@@ -27,6 +30,8 @@ window.MACHINES = {
   lpg_yard: { group: "Utilities", label: "LPG yard", svg: `<path d="M12 12h32a7 7 0 0 1 0 14H12a7 7 0 0 1 0-14zM12 32h32a7 7 0 0 1 0 14H12a7 7 0 0 1 0-14z"/><path d="M16 46v10M40 46v10M8 56h40"/><path d="M56 34c-4-4-2-8 0-12c2 4 5 6 0 12" class="hot"/>` },
   etp: { group: "Utilities", label: "ETP (effluent treatment)", svg: `<path d="M6 26h44l-8 22H14z"/><path d="M28 26v14"/><path d="M42 48v8h16"/><path d="M50 6c-3 5-5 7-5 10a5 5 0 0 0 10 0c0-3-2-5-5-10z"/>` },
   ro_plant: { group: "Utilities", label: "RO plant", svg: `<rect x="6" y="12" width="44" height="10" rx="5"/><rect x="6" y="28" width="44" height="10" rx="5"/><path d="M14 38v16M42 38v16M8 54h40"/><path d="M50 17h6v16h-6"/><path d="M56 42c-2 3-3 4-3 6a3 3 0 0 0 6 0c0-2-1-3-3-6z"/>` },
+  wtp: { group: "Utilities", label: "WTP (water treatment)", svg: `<path d="M6 20h22v30H6zM36 20h22v30H36z"/><path d="M6 30h22M36 34h22" class="hot"/><path d="M28 40h8M17 50v8M47 50v8"/><path d="M47 4c-3 5-5 7-5 10a5 5 0 0 0 10 0c0-3-2-5-5-10z"/>` },
+  pump_house: { group: "Utilities", label: "Pump house", svg: `<path d="M6 28 32 8l26 20M12 24v32h40V24"/><circle cx="28" cy="44" r="8"/><path d="M28 36v-6h14M36 44h10"/>` },
   cooling_tower: { group: "Utilities", label: "Cooling tower", svg: `<path d="M16 58c5-14 5-30 0-44h32c-5 14-5 30 0 44z"/><path d="M24 10c-3-3 3-5 0-8M32 10c-3-3 3-5 0-8M40 10c-3-3 3-5 0-8"/>` },
   compressor: { group: "Utilities", label: "Air compressor", svg: `<rect x="6" y="30" width="38" height="20" rx="10"/><circle cx="50" cy="20" r="9"/><path d="M50 29v8h-6M14 50v6M36 50v6M24 30v-8h17"/>` },
   pump: { group: "Utilities", label: "Pump", svg: `<circle cx="28" cy="36" r="14"/><path d="M28 22V10h22M4 36h10M14 56h28M28 36l8-8"/>` },
@@ -66,7 +71,7 @@ window.guessMachine = function (m) {
   const rules = [[/hr ?slit/, "hr_slitter"], [/cr ?slit|slitter/, "cr_slitter"], [/trim/, "trimming_line"], [/\bctl\b|cut.?to.?length|shear/, "cut_to_length"],
     [/galvalume|\baz\b/, "galvalume_line"], [/\bcgl\b|galvani/, "cgl_line"], [/\bccl\b|colou?r ?coat|ppgi/, "ccl_line"], [/pickl/, "pickling_line"],
     [/\bcrm\b|cold roll/, "cold_rolling_mill"], [/reheat/, "reheating_furnace"], [/anneal|\bbaf\b/, "annealing_furnace"],
-    [/\betp\b|effluent/, "etp"], [/\bro\b|reverse osmosis|\bdm\b/, "ro_plant"], [/boiler/, "boiler"], [/lpg|gas yard/, "lpg_yard"],
+    [/\bwtp\b|water treat/, "wtp"], [/pump ?house/, "pump_house"], [/\bpcc\b|\bmcc\b/, "pcc_panel"], [/\betp\b|effluent/, "etp"], [/\bro\b|reverse osmosis|\bdm\b/, "ro_plant"], [/boiler/, "boiler"], [/lpg|gas yard/, "lpg_yard"],
     [/cooling tower/, "cooling_tower"], [/oxygen|nitrogen|\basu\b/, "oxygen_plant"], [/fume|bag ?filter|\bfes\b|dust/, "fume_extraction"],
     [/workshop/, "workshop"], [/utilit/, "utility"],
     [/incom|transformer|33 ?kv|11 ?kv|\bhv\b|main/, "transformer"], [/induction|\bifm\b/, "induction_furnace"], [/\beaf\b|arc/, "arc_furnace"],

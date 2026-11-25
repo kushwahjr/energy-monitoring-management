@@ -44,6 +44,7 @@ class CloudSyncer:
     def _meters_payload(self):
         return [
             {"id": m.id, "name": m.name, "area": m.area, "contract_kva": m.contract_kva, "is_main": m.is_main, "machine": m.machine,
+             "panel": m.panel, "position": m.position, "fed_from": m.fed_from, "feeds": m.feeds,
              "alarms": {k: v for k, v in dataclasses.asdict(m.alarms).items() if v is not None}}
             for m in self.config.meters
         ]
@@ -63,6 +64,7 @@ class CloudSyncer:
             "plant_id": self.config.plant_id,
             "plant_name": self.config.plant_name,
             "meters": self._meters_payload(),
+            "panels": self.config.panels,
             "readings": [{k: r[k] for k in ("ts", "meter_id", *PARAM_KEYS) if r[k] is not None} for r in readings],
             "events": [{k: e[k] for k in ("ts", "meter_id", "kind", "message", "active")} for e in events],
         }
