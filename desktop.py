@@ -235,18 +235,21 @@ def open_window(url: str):
 
 def window_test(out: str):
     """Build check: open a real window, wait for a page to load, close it. Writes "ok" or the error to out."""
+    import threading
     result = ["timeout: the window did not load a page within 60 seconds"]
+    done = threading.Event()
     try:
         import webview
         w = webview.create_window(APP, html="<h1>Window test</h1>", width=600, height=400)
 
         def loaded(*a):
             result[0] = "ok"
+            done.set()
             w.destroy()
 
         def give_up():
-            time.sleep(60)
-            w.destroy()
+            if not done.wait(60):
+                w.destroy()
 
         w.events.loaded += loaded
         webview.start(give_up, private_mode=True)

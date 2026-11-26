@@ -8,6 +8,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the installers to the GitHub Release (false: build and check only)"
+        default: "true"
 
 permissions:
   contents: write
@@ -40,17 +44,6 @@ jobs:
           dist\EnergyMonitoring\EnergyMonitoring.exe --stop
           Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
           if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue; exit 1 }
-      - name: Check the app window opens
-        continue-on-error: true   # if it cannot, the app opens the dashboard in the browser instead
-        shell: pwsh
-        run: |
-          $out = "$env:RUNNER_TEMP\window-test.txt"
-          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--window-test", $out -PassThru
-          $p | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-          $r = Get-Content $out -Raw -ErrorAction SilentlyContinue
-          Write-Output "Window test: $r"
-          if ($r -ne "ok") { exit 1 }
       - name: Make installer
         shell: pwsh
         run: |
@@ -65,11 +58,24 @@ jobs:
         shell: bash
         run: echo "v=$(python -c 'from energylogger import __version__; print(__version__)')" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
+        if: ${{ inputs.publish != 'false' }}
         with:
           tag_name: v${{ steps.ver.outputs.v }}
           target_commitish: ${{ github.sha }}
           name: Energy Monitoring ${{ steps.ver.outputs.v }}
           files: dist/EnergyMonitoring-Setup-*.exe
+      - name: Check the app window opens (after the release, so it ends the log)
+        continue-on-error: true   # if it cannot, the app opens the dashboard in the browser instead
+        shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\window-test.txt"
+          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--window-test", $out -PassThru
+          $p | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          $r = Get-Content $out -Raw -ErrorAction SilentlyContinue
+          Write-Output "Window test: $r"
+          Write-Output "::notice title=Window test (Windows)::$($r -replace "`r?`n", '%0A')"
+          if ($r -ne "ok") { exit 1 }
 
   mac:
     strategy:
@@ -114,6 +120,7 @@ jobs:
         id: ver
         run: echo "v=$(python -c 'from energylogger import __version__; print(__version__)')" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
+        if: ${{ inputs.publish != 'false' }}
         with:
           tag_name: v${{ steps.ver.outputs.v }}
           target_commitish: ${{ github.sha }}
