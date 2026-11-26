@@ -44,6 +44,25 @@ jobs:
           dist\EnergyMonitoring\EnergyMonitoring.exe --stop
           Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
           if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue; exit 1 }
+      - name: Check the app moves off a port Windows keeps for itself (WinError 10013)
+        shell: pwsh
+        run: |
+          # Windows can reserve ports (Hyper-V, WSL, Docker). Reserve 8080 the same way and start the logger as Windows does at start-up.
+          netsh int ipv4 add excludedportrange protocol=tcp startport=8080 numberofports=1
+          if ($LASTEXITCODE -ne 0) { Write-Output "could not reserve port 8080 on this machine"; exit 1 }
+          $cfg = "$env:LOCALAPPDATA\Energy Monitoring\config.json"
+          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--server" -PassThru
+          $port = 8080; $ok = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep 1
+            $port = (Get-Content $cfg -Raw | ConvertFrom-Json).listen_port
+            if ($port -ne 8080) { try { Invoke-WebRequest "http://127.0.0.1:$port/api/info" -UseBasicParsing | Out-Null; $ok = $true; break } catch {} }
+          }
+          dist\EnergyMonitoring\EnergyMonitoring.exe --stop
+          Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
+          netsh int ipv4 delete excludedportrange protocol=tcp startport=8080 numberofports=1
+          Write-Output "Port test: dashboard on port $port"
+          if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log", "$env:LOCALAPPDATA\Energy Monitoring\app.log" -ErrorAction SilentlyContinue; exit 1 }
       - name: Make installer
         shell: pwsh
         run: |

@@ -18,8 +18,10 @@ reinstalling the app never touches them:
   EnergyMonitoring --stop     stop the background logger
   EnergyMonitoring --window-test FILE   open and close a test window, write "ok" or the error to FILE (used by the build)
 
-If the app's own window cannot open (for example Microsoft Edge WebView2 is missing on Windows), the dashboard
-opens in the default web browser instead. Anything that stops the app from starting is shown in a message box and
+If the app's own window cannot open (for example Microsoft Edge WebView2 is missing, or Smart App Control blocks a
+part of it on Windows), the dashboard opens in Microsoft Edge's app mode or the default web browser instead. If the
+dashboard's port (8080) cannot be opened, because another program uses it or Windows keeps it for itself (WinError
+10013), the app moves to another port and saves it in the settings. Anything that stops the app from starting is shown in a message box and
 written to app.log in the app-data folder.
 """
 
@@ -88,11 +90,22 @@ def alert(msg: str):
         pass
 
 
+def saved() -> dict:
+    try:
+        return json.loads(config_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def port() -> int:
     try:
-        return int(json.loads(config_path().read_text(encoding="utf-8")).get("listen_port", 8080))
-    except (OSError, ValueError):
+        return int(saved().get("listen_port", 8080))
+    except (TypeError, ValueError):
         return 8080
+
+
+def listen_host() -> str:
+    return str(saved().get("listen_host") or "0.0.0.0")
 
 
 def set_port(p: int):
@@ -112,16 +125,51 @@ def running(p: int) -> bool:
 
 
 def port_taken(p: int) -> bool:
+    """Does some program answer on port p?"""
     with socket.socket() as s:
         s.settimeout(0.5)
         return s.connect_ex(("127.0.0.1", p)) == 0
 
 
-def free_port(start: int) -> int | None:
-    for p in range(start + 1, start + 40):
-        if not port_taken(p):
+def can_listen(p: int, host: str) -> bool:
+    """Can the logger open port p? Another program may hold it, and Windows also refuses ports it keeps for
+    itself (Hyper-V, WSL, Docker: "WinError 10013 ... forbidden by its access permissions") although nothing uses them."""
+    with socket.socket() as s:
+        if sys.platform != "win32":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as the web server does
+        try:
+            s.bind((host, p))
+            return True
+        except OSError as e:
+            note(f"port {p} cannot be used: {e}")
+            return False
+
+
+def other_port(start: int, host: str) -> int | None:
+    """A port the logger can open: one near the old one, a few common ones, or else any port Windows/macOS hands out."""
+    for p in [*range(start + 1, start + 11), 8888, 9080, 9090, 18080, 28080, 38080]:
+        if p != start and can_listen(p, host):
             return p
-    return None
+    with socket.socket() as s:
+        try:
+            s.bind((host, 0))
+            return s.getsockname()[1]
+        except OSError:
+            return None
+
+
+def make_port_usable(host: str) -> int:
+    """Move the logger to another port (saved in the settings) when its port cannot be opened. Returns the port to use."""
+    p = port()
+    if can_listen(p, host):
+        return p
+    new = other_port(p, host)
+    if new is None:
+        raise RuntimeError(f"Windows does not let the app open port {p} or any other port. "
+                           "Security software may be blocking Energy Monitoring.")
+    note(f"moving the dashboard from port {p} to port {new}")
+    set_port(new)
+    return new
 
 
 def log_tail(lines: int = 12) -> str:
@@ -161,6 +209,7 @@ def serve():
     from energylogger.server import create_app
 
     cfg_path = config_path()
+    make_port_usable(listen_host())  # it is what starts with the computer, so it checks its port too
     cfg = load_config(cfg_path)
     (data_dir() / "logger.pid").write_text(str(os.getpid()))
     uvicorn.run(create_app(cfg_path), host=cfg.listen_host, port=cfg.listen_port, log_level="warning", log_config=None)
@@ -213,6 +262,15 @@ def mac_login_item():
 def open_browser(url: str, why: str):
     import webbrowser
     note(f"opening the dashboard in the web browser instead of the app window: {why}")
+    if sys.platform == "win32":  # Microsoft Edge's app mode looks like the app's own window (no tabs or address bar)
+        for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+            edge = Path(base or "-") / "Microsoft/Edge/Application/msedge.exe"
+            if base and edge.exists():
+                try:
+                    subprocess.Popen([str(edge), f"--app={url}"])
+                    return
+                except OSError:
+                    break
     if not webbrowser.open(url) and sys.platform == "win32":
         os.startfile(url)
 
@@ -269,17 +327,16 @@ def main():
     p = port()
     if not running(p):
         mac_login_item()
-        if not running(p) and port_taken(p):
-            # Another program already uses this port: move to a free one (saved, so start-up uses it too).
-            new = free_port(p)
-            if new is None:
-                return alert(f"Port {p} and the ones after it are used by other programs, so the dashboard cannot start.")
-            note(f"port {p} is used by another program, moving to port {new}")
-            set_port(new)
-            p = new
+        if port_taken(p):  # maybe the logger that starts with the computer, still getting ready
+            for _ in range(20):
+                if running(p):
+                    break
+                time.sleep(0.5)
         if not running(p):
+            make_port_usable(listen_host())
             start_background()
         for _ in range(180):  # the first start can take a while, for example while antivirus checks the files
+            p = port()  # the logger may have moved to another port
             if running(p):
                 break
             time.sleep(0.5)
