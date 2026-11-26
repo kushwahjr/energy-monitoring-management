@@ -44,12 +44,17 @@ jobs:
           dist\EnergyMonitoring\EnergyMonitoring.exe --stop
           Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
           if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue; exit 1 }
-      - name: Check the app moves off a port Windows keeps for itself (WinError 10013)
+      - name: Check the app moves off a port it cannot open (WinError 10013)
         shell: pwsh
         run: |
-          # Windows can reserve ports (Hyper-V, WSL, Docker). Reserve 8080 the same way and start the logger as Windows does at start-up.
-          netsh int ipv4 add excludedportrange protocol=tcp startport=8080 numberofports=1
-          if ($LASTEXITCODE -ne 0) { Write-Output "could not reserve port 8080 on this machine"; exit 1 }
+          # Port 8080 refused although nothing answers on it, as on the laptop: a socket holds it without listening.
+          # (A netsh port exclusion does not do this: Windows still lets programs open excluded ports.)
+          $hold = "$env:RUNNER_TEMP\hold_port.py"
+          Set-Content $hold "import socket, time`ns = socket.socket()`ns.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)`ns.bind(('0.0.0.0', 8080))`ntime.sleep(300)"
+          $h = Start-Process python -ArgumentList $hold -PassThru -NoNewWindow
+          Start-Sleep 2
+          Set-Content "$env:RUNNER_TEMP\try_port.py" "import socket`ntry:`n    socket.socket().bind(('0.0.0.0', 8080)); print('port 8080 can be opened')`nexcept OSError as e:`n    print('port 8080 refused:', e)"
+          python "$env:RUNNER_TEMP\try_port.py"
           $cfg = "$env:LOCALAPPDATA\Energy Monitoring\config.json"
           $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--server" -PassThru
           $port = 8080; $ok = $false
@@ -60,9 +65,10 @@ jobs:
           }
           dist\EnergyMonitoring\EnergyMonitoring.exe --stop
           Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
-          netsh int ipv4 delete excludedportrange protocol=tcp startport=8080 numberofports=1
+          Stop-Process -Id $h.Id -ErrorAction SilentlyContinue
           Write-Output "Port test: dashboard on port $port"
-          if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log", "$env:LOCALAPPDATA\Energy Monitoring\app.log" -ErrorAction SilentlyContinue; exit 1 }
+          Get-Content "$env:LOCALAPPDATA\Energy Monitoring\app.log" -ErrorAction SilentlyContinue | Select-Object -Last 5
+          if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue | Select-Object -Last 20; exit 1 }
       - name: Make installer
         shell: pwsh
         run: |
