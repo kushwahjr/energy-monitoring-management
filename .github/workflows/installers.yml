@@ -40,6 +40,17 @@ jobs:
           dist\EnergyMonitoring\EnergyMonitoring.exe --stop
           Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
           if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue; exit 1 }
+      - name: Check the app window opens
+        continue-on-error: true   # if it cannot, the app opens the dashboard in the browser instead
+        shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\window-test.txt"
+          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--window-test", $out -PassThru
+          $p | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          $r = Get-Content $out -Raw -ErrorAction SilentlyContinue
+          Write-Output "Window test: $r"
+          if ($r -ne "ok") { exit 1 }
       - name: Make installer
         shell: pwsh
         run: |
@@ -83,6 +94,16 @@ jobs:
           for i in $(seq 40); do sleep 1; curl -sf http://127.0.0.1:8080/api/info >/dev/null && ok=1 && break; done
           "dist/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --stop || true
           [ "${ok:-}" = 1 ] || { cat ~/Library/Application\ Support/Energy\ Monitoring/logger.log; exit 1; }
+      - name: Check the app window opens
+        continue-on-error: true   # if it cannot, the app opens the dashboard in the browser instead
+        run: |
+          out="$RUNNER_TEMP/window-test.txt"
+          "dist/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --window-test "$out" &
+          pid=$!
+          for i in $(seq 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          kill $pid 2>/dev/null || true
+          echo "Window test: $(cat "$out" 2>/dev/null)"
+          [ "$(cat "$out" 2>/dev/null)" = ok ]
       - name: Make disk image
         run: packaging/mac/make-dmg.sh "$(python -c 'from energylogger import __version__; print(__version__)')"
       - uses: actions/upload-artifact@v4
