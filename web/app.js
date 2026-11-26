@@ -1004,23 +1004,24 @@ async function viewSettings(preloaded) {
       <label class="f" data-for="ethernet gateway">IP address<input data-k="host" value="${esc(p.host || "")}" placeholder="192.168.1.50"></label>
       <label class="f" data-for="ethernet gateway">TCP port<input data-k="port" type="number" value="${p.port ?? 502}"></label>
       <label class="f" data-for="gateway">Gateway type<select data-k="framing"><option value="tcp" ${p.framing !== "rtu" ? "selected" : ""}>Modbus TCP gateway</option><option value="rtu" ${p.framing === "rtu" ? "selected" : ""}>Transparent (RTU over TCP)</option></select></label>
-      <label class="f" data-for="rs485">Serial port<input data-k="serial_port" value="${esc(p.serial_port || "")}" placeholder="COM3 or /dev/ttyUSB0"></label>
+      <label class="f" data-for="rs485">Serial port (COM)<input data-k="serial_port" list="serialPortList" value="${esc(p.serial_port || "")}" placeholder="COM3 or /dev/ttyUSB0"></label>
       <label class="f" data-for="rs485">Baud rate<select data-k="baudrate">${[2400, 4800, 9600, 19200, 38400, 57600, 115200].map(b => `<option ${+(p.baudrate || 9600) === b ? "selected" : ""}>${b}</option>`).join("")}</select></label>
       <label class="f" data-for="rs485">Parity<select data-k="parity">${[["N", "None"], ["E", "Even"], ["O", "Odd"]].map(([k, l]) => `<option value="${k}" ${(p.parity || "N") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label class="f" data-for="rs485">Stop bits<select data-k="stopbits">${[1, 2].map(b => `<option ${+(p.stopbits || 1) === b ? "selected" : ""}>${b}</option>`).join("")}</select></label>
       <label class="f" data-for="rs485 ethernet gateway">Timeout (s)<input data-k="timeout" type="number" step="0.1" value="${p.timeout ?? 2}"></label>
     </div></div>`;
 
-  const meterForm = (m, i) => `<div class="settings-item" data-meter="${i}">
-    <div class="row"><span data-pic>${machinePic(liveMeter(m), 36)}</span><b>${esc(m.name || m.id || "New machine")}</b><div class="spacer"></div><span class="hint" data-test-out></span>
+  const meterForm = (m, i, _, prof = m.profile || (cfg.ports[m.port] && cfg.ports[m.port].kind === "simulator" ? "simulated" : "")) => `<div class="settings-item" data-meter="${i}">
+    <div class="row"><span data-pic>${machinePic(liveMeter(m), 36)}</span><b>${esc(m.name || m.id || "New machine")}</b>${isDemo(m) ? `<span class="tag">Demo</span>` : ""}<div class="spacer"></div>
       <button data-test="${i}">Test reading</button><button class="danger ghost" data-del-meter="${i}">Remove</button></div>
+    <div class="test-out" data-test-out hidden></div>
     <div class="form">
       <label class="f">Name<input data-k="name" value="${esc(m.name || "")}" placeholder="Induction Furnace 1"></label>
       <label class="f">Picture on diagram<input type="hidden" data-k="machine" value="${esc(m.machine || "")}"><button type="button" class="pick-btn" data-pick>${esc(m.machine && MACHINES[m.machine] ? MACHINES[m.machine].label : "Pick from the name")}</button></label>
       <label class="f">Area<input data-k="area" value="${esc(m.area || "")}" placeholder="Melt Shop"></label>
       <label class="f">Meter ID<input data-k="id" value="${esc(m.id || "")}" placeholder="eaf1"></label>
       <label class="f">Connection<select data-k="port">${Object.keys(cfg.ports).map(p => `<option ${m.port === p ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
-      <label class="f">Meter model<select data-k="profile">${profileNames().map(p => `<option value="${esc(p)}" ${m.profile === p ? "selected" : ""}>${esc(modelLabel(p))}</option>`).join("")}</select></label>
+      <label class="f">Meter model<select data-k="profile">${prof ? "" : `<option value="" selected>Choose the meter model…</option>`}${profileNames().map(p => `<option value="${esc(p)}" ${prof === p ? "selected" : ""}>${esc(modelLabel(p))}</option>`).join("")}</select></label>
       <label class="f">Modbus address (slave ID)<input data-k="unit_id" type="number" min="1" max="247" value="${m.unit_id ?? 1}"></label>
       <label class="f">Contract demand kVA<input data-k="contract_kva" type="number" value="${m.contract_kva ?? ""}"></label>
       <label class="f">Panel<select data-k="panel"><option value="">Main bus</option>${cfg.panels.map(p => `<option value="${esc(p.id)}" ${m.panel === p.id ? "selected" : ""}>${esc(p.name || p.id)}</option>`).join("")}</select></label>
@@ -1035,10 +1036,18 @@ async function viewSettings(preloaded) {
         .map(([k, l]) => `<label class="f">${l}<input data-a="${k}" type="number" step="any" value="${(m.alarms || {})[k] ?? ""}"></label>`).join("")}
     </div></details></div>`;
 
+  const isDemo = m => (cfg.ports[m.port] && cfg.ports[m.port].kind === "simulator") || (m.enabled === false && /_example$/.test(m.id || ""));
+  const demoCount = cfg.meters.filter(isDemo).length;
   const metersTab = () => `<p class="lede">Each machine is one meter. Machines appear on the plant diagram in this order.</p>
+    ${demoCount ? `<div class="panel demo-box"><b>${demoCount} demo machine${demoCount > 1 ? "s" : ""} with simulated meters</b>
+      <p class="hint">Before connecting your real meters, remove the demo machines so plant totals, reports and Insights show only real data.
+      Their made-up history goes too. Your panels, branding, users and shifts stay.</p>
+      <div class="row"><button class="danger" id="sRemoveDemo">Remove demo machines</button><span class="err" id="sDemoErr"></span></div></div>` : ""}
     <div id="sMeters">${cfg.meters.map(meterForm).join("")}</div>
     <button id="sAddMeter">Add machine</button>
     <h2>Connections</h2><p class="hint">One entry per RS485 port, Ethernet meter or gateway. Several meters can share one RS485 line or gateway, each with its own Modbus address.</p>
+    <div class="row" style="margin-bottom:10px"><span class="hint" id="sPortsFound">Looking for serial ports on this PC…</span><button class="ghost" id="sFindPorts">Look again</button></div>
+    <datalist id="serialPortList"></datalist>
     <div id="sPorts">${Object.entries(cfg.ports).map(([n, p]) => portForm(n, p)).join("")}</div>
     <div class="row"><input id="sNewPort" placeholder="New connection name, e.g. rs485_com4"><button id="sAddPort">Add connection</button></div>
     <h2>Meter models</h2>
@@ -1087,6 +1096,7 @@ async function viewSettings(preloaded) {
   const readMeter = el => {
     const m = { alarms: {} };
     el.querySelectorAll("[data-k]").forEach(i => (m[i.dataset.k] = i.value));
+    m.id = (m.id || "").trim() || (m.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30);
     m.unit_id = +m.unit_id || 1; m.enabled = m.enabled === "true"; m.is_main = m.is_main === "true"; m.contract_kva = m.contract_kva === "" ? null : +m.contract_kva;
     el.querySelectorAll("[data-a]").forEach(i => { if (i.value !== "") m.alarms[i.dataset.a] = +i.value; });
     return m;
@@ -1133,18 +1143,55 @@ async function viewSettings(preloaded) {
           onUpload: url => { if (saved) saved.picture_url = url; upd(); } });
       };
     });
-    $("#sAddPort").onclick = () => { const n = $("#sNewPort").value.trim().replace(/\s+/g, "_"); if (!n) return toast("Type a name for the connection first."); if (!keep()) return; cfg.ports[n] = { kind: "rs485", serial_port: "", baudrate: 9600, parity: "N", stopbits: 1 }; redraw(); };
+    $("#sAddPort").onclick = () => { const n = $("#sNewPort").value.trim().replace(/\s+/g, "_"); if (!n) return toast("Type a name for the connection first."); if (!keep()) return; cfg.ports[n] = { kind: "rs485", serial_port: (S.serialPorts || []).find(x => x.usb)?.device || "", baudrate: 9600, parity: "N", stopbits: 1, timeout: 1 }; redraw(); };
     v.querySelectorAll("[data-del-port]").forEach(b => (b.onclick = () => { if (!keep()) return; delete cfg.ports[b.dataset.delPort]; redraw(); }));
-    $("#sAddMeter").onclick = () => { if (!keep()) return; cfg.meters.push({ id: "", name: "", area: "", port: Object.keys(cfg.ports)[0], profile: profileNames()[0], unit_id: 1, enabled: true, alarms: {} }); redraw(); };
+    $("#sAddMeter").onclick = () => { if (!keep()) return; if (!Object.keys(cfg.ports).length) return toast("Add a connection first, under Connections below."); cfg.meters.push({ id: "", name: "", area: "", port: Object.keys(cfg.ports).find(n => cfg.ports[n].kind !== "simulator") || Object.keys(cfg.ports)[0], profile: "", unit_id: 1, enabled: true, alarms: {} }); redraw(); };
     v.querySelectorAll("[data-del-meter]").forEach(b => (b.onclick = () => { if (!keep()) return; cfg.meters.splice(+b.dataset.delMeter, 1); redraw(); }));
+    const findPorts = async () => {
+      const el = $("#sPortsFound");
+      if (!el) return;
+      try {
+        S.serialPorts = (await api("/api/settings/serial-ports")).ports;
+        $("#serialPortList").innerHTML = S.serialPorts.map(x => `<option value="${esc(x.device)}">${esc(x.description || x.device)}</option>`).join("");
+        el.textContent = S.serialPorts.length ? "Serial ports on this PC: " + S.serialPorts.map(x => x.device + (x.description && x.description !== x.device ? ` (${x.description})` : "")).join(", ")
+          : "No serial ports found on this PC. Plug in the USB-RS485 converter (install its driver if Windows asks), then press Look again.";
+      } catch (e) { el.textContent = e.message; }
+    };
+    findPorts();
+    $("#sFindPorts").onclick = findPorts;
+    if ($("#sRemoveDemo")) $("#sRemoveDemo").onclick = async () => {
+      const b = $("#sRemoveDemo");
+      if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = `Press again to remove ${demoCount} demo machine${demoCount > 1 ? "s" : ""}`; return; }
+      b.disabled = true;
+      try {
+        await api("/api/settings/remove-demo", { method: "POST", body: "{}" });
+        toast("Demo machines removed. Now add your real meter with Add machine.");
+        refreshInfo();
+        data = await api("/api/settings"); S.settingsTab = "meters"; viewSettings(data);
+      } catch (e) { b.disabled = false; $("#sDemoErr").textContent = e.message; }
+    };
+    const PL = S.info.params || {};
     v.querySelectorAll("[data-test]").forEach(b => (b.onclick = async () => {
       const el = b.closest("[data-meter]"), out = $("[data-test-out]", el);
-      out.textContent = "Reading…"; out.className = "hint"; out.style.color = "";
+      out.hidden = false; out.className = "test-out"; out.textContent = "Reading the meter…";
       try {
         const r = await api("/api/settings/test-meter", { method: "POST", body: JSON.stringify({ meter: { ...readMeter(el), enabled: true }, ports: readPorts(), profiles: readProfiles() }) });
-        if (r.ok) { out.style.color = "var(--ok)"; out.textContent = `OK: ${fmtNum(r.values.kw)} kW, ${fmtNum(r.values.v_ln ?? r.values.v_ll, 0)} V, PF ${fmtNum(r.values.pf, 3)}, ${fmtNum(r.values.hz, 2)} Hz`; if (r.hint) { out.style.color = "var(--warn)"; out.textContent += ". " + r.hint; } }
-        else { out.className = "err"; out.textContent = r.error; }
-      } catch (e) { out.className = "err"; out.textContent = e.message; }
+        if (!r.ok) { out.className = "test-out bad"; out.innerHTML = `<b>Not working.</b> ${esc(r.error)}`; return; }
+        const x = r.values, f = (k, d, u) => (x[k] != null ? `<span><small>${esc((PL[k] || {}).label || k)}</small>${fmtNum(x[k], d)} ${u}</span>` : "");
+        out.className = "test-out " + (r.hint ? "warn" : "ok");
+        out.innerHTML = `<b>${r.hint ? "The meter answered, but check this." : "Working. Compare these numbers with the meter's own display."}</b>
+          <div class="test-vals">${f("v_ln", 1, "V")}${x.v_ln == null ? f("v_ll", 1, "V") : ""}${f("i_avg", 1, "A")}${f("kw", 2, "kW")}${f("kva", 2, "kVA")}${f("pf", 3, "")}${f("hz", 2, "Hz")}${f("kwh", 1, "kWh")}${f("kvah", 1, "kVAh")}</div>
+          ${r.hint ? `<p>${esc(r.hint)}</p>` : ""}
+          ${r.skipped && r.skipped.length ? `<p class="hint">Not available on this meter: ${r.skipped.map(k => esc((PL[k] || {}).label || k)).join(", ")}. The rest is logged normally.</p>` : ""}
+          ${r.fix ? `<button class="primary" data-fix>Use this word order</button>` : ""}`;
+        if (r.fix) $("[data-fix]", out).onclick = () => {
+          if (!keep()) return;
+          const base = cfg.profiles[r.fix.profile] || data.library_profiles[r.fix.profile] || {};
+          cfg.profiles[r.fix.profile] = { ...base, word_order: r.fix.word_order };
+          redraw();
+          toast("Word order changed for this meter model. Press Save and restart logging.");
+        };
+      } catch (e) { out.className = "test-out bad"; out.textContent = e.message; }
     }));
   }
   $("#sSave").onclick = async () => {

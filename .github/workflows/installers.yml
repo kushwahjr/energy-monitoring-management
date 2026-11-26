@@ -8,6 +8,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the installers to the GitHub Release (false: build and check only)"
+        default: "true"
 
 permissions:
   contents: write
@@ -40,6 +44,31 @@ jobs:
           dist\EnergyMonitoring\EnergyMonitoring.exe --stop
           Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
           if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue; exit 1 }
+      - name: Check the app moves off a port it cannot open (WinError 10013)
+        shell: pwsh
+        run: |
+          # Port 8080 refused although nothing answers on it, as on the laptop: a socket holds it without listening.
+          # (A netsh port exclusion does not do this: Windows still lets programs open excluded ports.)
+          $hold = "$env:RUNNER_TEMP\hold_port.py"
+          Set-Content $hold "import socket, time`ns = socket.socket()`ns.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)`ns.bind(('0.0.0.0', 8080))`ntime.sleep(300)"
+          $h = Start-Process python -ArgumentList $hold -PassThru -NoNewWindow
+          Start-Sleep 2
+          Set-Content "$env:RUNNER_TEMP\try_port.py" "import socket`ntry:`n    socket.socket().bind(('0.0.0.0', 8080)); print('port 8080 can be opened')`nexcept OSError as e:`n    print('port 8080 refused:', e)"
+          python "$env:RUNNER_TEMP\try_port.py"
+          $cfg = "$env:LOCALAPPDATA\Energy Monitoring\config.json"
+          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--server" -PassThru
+          $port = 8080; $ok = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep 1
+            $port = (Get-Content $cfg -Raw | ConvertFrom-Json).listen_port
+            if ($port -ne 8080) { try { Invoke-WebRequest "http://127.0.0.1:$port/api/info" -UseBasicParsing | Out-Null; $ok = $true; break } catch {} }
+          }
+          dist\EnergyMonitoring\EnergyMonitoring.exe --stop
+          Stop-Process -Id $p.Id -ErrorAction SilentlyContinue
+          Stop-Process -Id $h.Id -ErrorAction SilentlyContinue
+          Write-Output "Port test: dashboard on port $port"
+          Get-Content "$env:LOCALAPPDATA\Energy Monitoring\app.log" -ErrorAction SilentlyContinue | Select-Object -Last 5
+          if (-not $ok) { Get-Content "$env:LOCALAPPDATA\Energy Monitoring\logger.log" -ErrorAction SilentlyContinue | Select-Object -Last 20; exit 1 }
       - name: Make installer
         shell: pwsh
         run: |
@@ -54,11 +83,24 @@ jobs:
         shell: bash
         run: echo "v=$(python -c 'from energylogger import __version__; print(__version__)')" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
+        if: ${{ inputs.publish != 'false' }}
         with:
           tag_name: v${{ steps.ver.outputs.v }}
           target_commitish: ${{ github.sha }}
           name: Energy Monitoring ${{ steps.ver.outputs.v }}
           files: dist/EnergyMonitoring-Setup-*.exe
+      - name: Check the app window opens (after the release, so it ends the log)
+        continue-on-error: true   # if it cannot, the app opens the dashboard in the browser instead
+        shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP\window-test.txt"
+          $p = Start-Process -FilePath dist\EnergyMonitoring\EnergyMonitoring.exe -ArgumentList "--window-test", $out -PassThru
+          $p | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          $r = Get-Content $out -Raw -ErrorAction SilentlyContinue
+          Write-Output "Window test: $r"
+          Write-Output "::notice title=Window test (Windows)::$($r -replace "`r?`n", '%0A')"
+          if ($r -ne "ok") { exit 1 }
 
   mac:
     strategy:
@@ -83,6 +125,16 @@ jobs:
           for i in $(seq 40); do sleep 1; curl -sf http://127.0.0.1:8080/api/info >/dev/null && ok=1 && break; done
           "dist/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --stop || true
           [ "${ok:-}" = 1 ] || { cat ~/Library/Application\ Support/Energy\ Monitoring/logger.log; exit 1; }
+      - name: Check the app window opens
+        continue-on-error: true   # if it cannot, the app opens the dashboard in the browser instead
+        run: |
+          out="$RUNNER_TEMP/window-test.txt"
+          "dist/Energy Monitoring.app/Contents/MacOS/EnergyMonitoring" --window-test "$out" &
+          pid=$!
+          for i in $(seq 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          kill $pid 2>/dev/null || true
+          echo "Window test: $(cat "$out" 2>/dev/null)"
+          [ "$(cat "$out" 2>/dev/null)" = ok ]
       - name: Make disk image
         run: packaging/mac/make-dmg.sh "$(python -c 'from energylogger import __version__; print(__version__)')"
       - uses: actions/upload-artifact@v4
@@ -93,6 +145,7 @@ jobs:
         id: ver
         run: echo "v=$(python -c 'from energylogger import __version__; print(__version__)')" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
+        if: ${{ inputs.publish != 'false' }}
         with:
           tag_name: v${{ steps.ver.outputs.v }}
           target_commitish: ${{ github.sha }}

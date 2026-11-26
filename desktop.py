@@ -16,6 +16,13 @@ reinstalling the app never touches them:
   EnergyMonitoring            open the dashboard (start logging if needed)
   EnergyMonitoring --server   run the logger only, no window (used at start-up)
   EnergyMonitoring --stop     stop the background logger
+  EnergyMonitoring --window-test FILE   open and close a test window, write "ok" or the error to FILE (used by the build)
+
+If the app's own window cannot open (for example Microsoft Edge WebView2 is missing, or Smart App Control blocks a
+part of it on Windows), the dashboard opens in Microsoft Edge's app mode or the default web browser instead. If the
+dashboard's port (8080) cannot be opened, because another program uses it or Windows keeps it for itself (WinError
+10013), the app moves to another port and saves it in the settings. Anything that stops the app from starting is shown in a message box and
+written to app.log in the app-data folder.
 """
 
 from __future__ import annotations
@@ -23,9 +30,11 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 
@@ -56,19 +65,121 @@ def config_path() -> Path:
     return cfg
 
 
+def note(msg: str):
+    """A line in app.log, so a start-up problem can be found afterwards."""
+    try:
+        with open(data_dir() / "app.log", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg.rstrip() + "\n")
+    except OSError:
+        pass
+
+
+def alert(msg: str):
+    """Show a message the person can read (the app has no console window)."""
+    note("MESSAGE: " + msg)
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, msg, APP, 0x10 | 0x10000)  # error icon, on top
+        elif sys.platform == "darwin":
+            text = msg.replace("\\", "\\\\").replace('"', '\\"')
+            subprocess.run(["osascript", "-e", f'display alert "{APP}" message "{text}" as critical'], capture_output=True)
+        else:
+            print(msg, file=sys.stderr)
+    except Exception:
+        pass
+
+
+def saved() -> dict:
+    try:
+        return json.loads(config_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def port() -> int:
     try:
-        return int(json.loads(config_path().read_text(encoding="utf-8")).get("listen_port", 8080))
-    except (OSError, ValueError):
+        return int(saved().get("listen_port", 8080))
+    except (TypeError, ValueError):
         return 8080
 
 
+def listen_host() -> str:
+    return str(saved().get("listen_host") or "0.0.0.0")
+
+
+def set_port(p: int):
+    cfg = config_path()
+    raw = json.loads(cfg.read_text(encoding="utf-8"))
+    raw["listen_port"] = p
+    cfg.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+
 def running(p: int) -> bool:
+    """Is this app's logger answering on port p (not some other program)?"""
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{p}/api/info", timeout=1.5) as r:
-            return r.status == 200
-    except OSError:
+            return r.status == 200 and "mode" in json.loads(r.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
         return False
+
+
+def port_taken(p: int) -> bool:
+    """Does some program answer on port p?"""
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", p)) == 0
+
+
+def can_listen(p: int, host: str) -> bool:
+    """Can the logger open port p? Another program may hold it, and Windows also refuses ports it keeps for
+    itself (Hyper-V, WSL, Docker: "WinError 10013 ... forbidden by its access permissions") although nothing uses them."""
+    with socket.socket() as s:
+        if sys.platform != "win32":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as the web server does
+        try:
+            s.bind((host, p))
+            return True
+        except OSError as e:
+            note(f"port {p} cannot be used: {e}")
+            return False
+
+
+def other_port(start: int, host: str) -> int | None:
+    """A port the logger can open: one near the old one, a few common ones, or else any port Windows/macOS hands out."""
+    for p in [*range(start + 1, start + 11), 8888, 9080, 9090, 18080, 28080, 38080]:
+        if p != start and can_listen(p, host):
+            return p
+    with socket.socket() as s:
+        try:
+            s.bind((host, 0))
+            return s.getsockname()[1]
+        except OSError:
+            return None
+
+
+def make_port_usable(host: str) -> int:
+    """Move the logger to another port (saved in the settings) when its port cannot be opened. Returns the port to use."""
+    p = port()
+    if can_listen(p, host):
+        return p
+    new = other_port(p, host)
+    if new is None:
+        raise RuntimeError(f"Windows does not let the app open port {p} or any other port. "
+                           "Security software may be blocking Energy Monitoring.")
+    note(f"moving the dashboard from port {p} to port {new}")
+    set_port(new)
+    return new
+
+
+def log_tail(lines: int = 12) -> str:
+    out = []
+    for name in ("logger.log", "logger-console.log", "app.log"):
+        try:
+            out += (data_dir() / name).read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+        except OSError:
+            pass
+    return "\n".join(out[-lines:])
 
 
 def self_command(*args: str) -> list[str]:
@@ -76,7 +187,7 @@ def self_command(*args: str) -> list[str]:
 
 
 def start_background():
-    log = open(data_dir() / "logger.log", "ab")
+    log = open(data_dir() / "logger-console.log", "ab")  # the logger itself writes logger.log
     kw: dict = {"stdout": log, "stderr": log, "stdin": subprocess.DEVNULL, "cwd": str(data_dir())}
     if sys.platform == "win32":
         kw["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # detached, own process group, no console window
@@ -98,6 +209,7 @@ def serve():
     from energylogger.server import create_app
 
     cfg_path = config_path()
+    make_port_usable(listen_host())  # it is what starts with the computer, so it checks its port too
     cfg = load_config(cfg_path)
     (data_dir() / "logger.pid").write_text(str(os.getpid()))
     uvicorn.run(create_app(cfg_path), host=cfg.listen_host, port=cfg.listen_port, log_level="warning", log_config=None)
@@ -147,15 +259,61 @@ def mac_login_item():
     subprocess.run(["launchctl", "load", str(LAUNCH_AGENT)], capture_output=True)
 
 
+def open_browser(url: str, why: str):
+    import webbrowser
+    note(f"opening the dashboard in the web browser instead of the app window: {why}")
+    if sys.platform == "win32":  # Microsoft Edge's app mode looks like the app's own window (no tabs or address bar)
+        for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+            edge = Path(base or "-") / "Microsoft/Edge/Application/msedge.exe"
+            if base and edge.exists():
+                try:
+                    subprocess.Popen([str(edge), f"--app={url}"])
+                    return
+                except OSError:
+                    break
+    if not webbrowser.open(url) and sys.platform == "win32":
+        os.startfile(url)
+
+
 def open_window(url: str):
+    """The dashboard in its own window; the web browser when that window cannot open."""
+    shown = []
+    started = time.monotonic()
     try:
         import webview  # pywebview: Edge WebView2 on Windows, WebKit on Mac
-    except ImportError:
-        import webbrowser
-        webbrowser.open(url)
-        return
-    webview.create_window(APP, url, width=1400, height=900, min_size=(400, 600), text_select=True)
-    webview.start(private_mode=False, storage_path=str(data_dir() / "window"))
+        w = webview.create_window(APP, url, width=1400, height=900, min_size=(400, 600), text_select=True)
+        w.events.shown += lambda *a: shown.append(True)
+        webview.start(private_mode=False, storage_path=str(data_dir() / "window"))
+    except Exception as e:  # no pywebview, no WebView2 runtime, .NET problem, ...
+        note("app window failed:\n" + traceback.format_exc())
+        return open_browser(url, f"{type(e).__name__}: {e}")
+    if not shown and time.monotonic() - started < 10:
+        open_browser(url, "the app window closed before it was shown")
+
+
+def window_test(out: str):
+    """Build check: open a real window, wait for a page to load, close it. Writes "ok" or the error to out."""
+    import threading
+    result = ["timeout: the window did not load a page within 60 seconds"]
+    done = threading.Event()
+    try:
+        import webview
+        w = webview.create_window(APP, html="<h1>Window test</h1>", width=600, height=400)
+
+        def loaded(*a):
+            result[0] = "ok"
+            done.set()
+            w.destroy()
+
+        def give_up():
+            if not done.wait(60):
+                w.destroy()
+
+        w.events.loaded += loaded
+        webview.start(give_up, private_mode=True)
+    except Exception:
+        result[0] = "error:\n" + traceback.format_exc()
+    Path(out).write_text(result[0], encoding="utf-8")
 
 
 def main():
@@ -164,21 +322,39 @@ def main():
         return serve()
     if "--stop" in args:
         return stop()
+    if "--window-test" in args:
+        return window_test(args[args.index("--window-test") + 1])
     p = port()
     if not running(p):
         mac_login_item()
+        if port_taken(p):  # maybe the logger that starts with the computer, still getting ready
+            for _ in range(20):
+                if running(p):
+                    break
+                time.sleep(0.5)
         if not running(p):
+            make_port_usable(listen_host())
             start_background()
-        for _ in range(60):  # first start can take a few seconds
+        for _ in range(180):  # the first start can take a while, for example while antivirus checks the files
+            p = port()  # the logger may have moved to another port
             if running(p):
                 break
             time.sleep(0.5)
         else:
-            raise SystemExit(f"The logger did not start. See {data_dir() / 'logger.log'}")
+            tail = log_tail()
+            return alert("Energy Monitoring could not start its logger.\n\n"
+                         + (f"Last lines of the log:\n{tail}\n\n" if tail else "")
+                         + f"The full log is in {data_dir()}. Please send logger.log and app.log from that folder.")
     open_window(f"http://127.0.0.1:{p}/")
 
 
 if __name__ == "__main__":
     if FROZEN and sys.platform == "win32" and sys.stdout is None:  # windowed build has no console
         sys.stdout = sys.stderr = open(os.devnull, "w")
-    main()
+    try:
+        main()
+    except Exception:
+        note("start-up failed:\n" + traceback.format_exc())
+        if "--server" not in sys.argv:
+            alert(f"Energy Monitoring could not start:\n\n{traceback.format_exc(limit=3)}\n\nDetails are in {data_dir() / 'app.log'}.")
+        sys.exit(1)

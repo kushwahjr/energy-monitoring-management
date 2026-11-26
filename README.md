@@ -143,17 +143,43 @@ and is billed to that API key. Leave the key empty to keep everything on the pla
 
 ## Connecting real meters
 
-Open **Settings** on the plant PC itself (settings are only editable from the PC, or by an admin user).
+Everything is done on the plant PC, in **Settings → Machines and meters** (signed in as an admin).
 
-1. **Connections**: add one per RS485 port (COM3, `/dev/ttyUSB0`, with baud rate, parity, stop bits as set on the meters),
-   per Ethernet meter (IP, port 502), or per gateway (IP, port, and gateway type).
-2. **Meter models**: the shipped profiles are **templates with placeholder addresses**. For each model you use,
-   add its register map from the meter's Modbus manual (address, `float32`/`int16`/`uint32`…, scale, holding or input
-   registers, word order). Save it as `profiles/<model>.json` or paste it into the Settings page.
-   If your manual numbers registers from 1 or as 40001…, set `"address_offset": -1` or subtract 40001.
-3. **Meters**: name, area, connection, model, Modbus address (slave ID), contract demand, and whether it is a
-   **main incomer** (plant totals use main incomers, so feeders are not counted twice).
-4. Press **Test reading** to check the wiring, then **Save and restart logging**.
+**What you need**
+
+- **RS485 meters**: a USB-RS485 converter (an industrial one with isolation is best, such as a CH340, FTDI or CP2102
+  based converter) and a twisted-pair shielded cable. Connect the converter's A(+) and B(−) to the meter's A and B
+  (Schneider and some others call them D1/D0 or + / −). Up to about 30 meters can share one RS485 line, each with its own
+  Modbus ID; put a 120 Ω resistor across A and B at the far end of a long line.
+- **Ethernet meters** (PM5300 with Ethernet, ABB M2M Ethernet and so on): the meter and the PC on the same network.
+- **Gateway**: an RS485-to-Ethernet gateway for meters that are far from the PC. Choose *Modbus TCP gateway* when the
+  gateway converts the protocol, or *Transparent* when it only passes raw bytes through.
+
+On each meter, note its communication settings from its own menu: **Modbus ID** (slave address), **baud rate**,
+**parity** and **stop bits**. Meters on one RS485 line must share the same baud rate and parity and each needs a different ID.
+
+**Steps**
+
+1. **Remove demo machines** (the box at the top). The simulated machines and their made-up history are removed so totals,
+   reports and Insights show only real data. Panels, branding, users and shifts stay.
+2. **Connections**: the page lists the serial (COM) ports it finds on this PC, such as *COM4 (USB-SERIAL CH340)*.
+   Put that port in the RS485 connection with the meters' baud rate, parity and stop bits. For an Ethernet meter or a
+   gateway, choose that type and type its IP address (port 502 unless changed).
+3. **Add machine**: name, area, connection, **meter model**, **Modbus address (slave ID)**. If it is the main grid
+   incomer, set *Plant total* to *Counted*.
+4. Press **Test reading**. It shows voltage, current, kW, kVA, PF, frequency and kWh: compare them with the meter's
+   display. If the numbers only make sense with the two halves of each value swapped, it says so: press
+   **Use this word order**. If nothing comes back, it says why in plain words (port not found or in use, no answer at
+   that ID and baud rate, wrong model, IP not reachable).
+5. **Save and restart logging**. The machine appears on the Plant page within seconds and is logged every minute.
+
+The meter models in the list come from `profiles/`; a model not in the list can be added by pasting its register map
+from the meter's Modbus manual under *Meter models* (address, `float32`/`int16`/`uint32`…, scale, holding or input
+registers, word order). If the manual numbers registers from 1 or as 40001…, set `"address_offset": -1` or subtract 40001.
+
+**Testing without a meter**: `python tools/fake_meter.py --port 5020` answers like an Ethernet meter on this PC
+(127.0.0.1, port 5020, ID 1, model *generic_float32_template*); `--profile selec_mfm384` pretends to be that model,
+`--pty` (Linux/Mac) makes a virtual RS485 port, and `--serial COM5` answers on a real serial port.
 
 ## Meter models included
 

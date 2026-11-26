@@ -53,6 +53,15 @@ class Database:
                 (ts, meter_id, kind, message, int(active)),
             )
 
+    def delete_meters(self, meter_ids: list[str]):
+        """Remove everything logged for these meters (used to clear the demo's simulated history)."""
+        if not meter_ids:
+            return
+        marks = ", ".join("?" * len(meter_ids))
+        with self.lock, self.conn:
+            for table, col in (("readings", "meter_id"), ("events", "meter_id"), ("meters", "id")):
+                self.conn.execute(f"DELETE FROM {table} WHERE {col} IN ({marks})", meter_ids)
+
     # ---- meter registry (used on the plant PC and on the cloud server) ----
     def upsert_meter(self, m: dict):
         import json, time
