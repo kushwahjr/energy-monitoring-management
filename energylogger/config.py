@@ -242,7 +242,9 @@ def parse_config(raw: dict, base: Path) -> Config:
     meters: list[Meter] = []
     seen = set()
     for m in raw.get("meters", []):
-        mid = str(_req(m, "id", "meter"))
+        mid = str(_req(m, "id", "meter")).strip()
+        if not mid:
+            raise ConfigError(f"machine '{m.get('name') or '(no name)'}': give it a Meter ID, a short code such as ccl1")
         if mid in seen:
             raise ConfigError(f"duplicate meter id '{mid}'")
         seen.add(mid)
@@ -250,6 +252,8 @@ def parse_config(raw: dict, base: Path) -> Config:
         if port not in ports:
             raise ConfigError(f"meter '{mid}': unknown port '{port}'")
         profile = m.get("profile", "simulated")
+        if ports[port].kind != "simulator" and not profile:
+            raise ConfigError(f"machine '{m.get('name') or mid}': choose its meter model")
         if ports[port].kind != "simulator" and profile not in profiles:
             raise ConfigError(f"meter '{mid}': unknown profile '{profile}'")
         alarms = Alarms(**{k: v for k, v in m.get("alarms", {}).items() if k in Alarms.__dataclass_fields__})

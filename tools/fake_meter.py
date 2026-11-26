@@ -3,6 +3,8 @@
   python tools/fake_meter.py --port 5020 --units 1 2 3
   python tools/fake_meter.py --port 5021 --framing rtu     (acts like a transparent gateway)
   python tools/fake_meter.py --profile siemens_pac3200        (pretends to be that meter model)
+  python tools/fake_meter.py --pty                            (Linux/Mac: a virtual RS485 port, prints its name)
+  python tools/fake_meter.py --serial COM5 --baud 9600        (answers on a real serial port, e.g. a second USB-RS485 adapter)
 
 It answers "read holding/input registers" (function 3 and 4) with the registers of the
 chosen model profile (default: generic_float32_template), filled with changing values.
@@ -20,6 +22,7 @@ from pathlib import Path
 
 PROFILES = Path(__file__).resolve().parent.parent / "profiles"
 PROFILE = json.loads((PROFILES / "generic_float32_template.json").read_text())
+MISSING: set[int] = set()  # register addresses this meter does not have (--missing)
 PACK = {"float32": ">f", "float64": ">d", "int16": ">h", "uint16": ">H", "int32": ">i", "uint32": ">I", "int64": ">q", "uint64": ">Q"}
 
 
@@ -81,9 +84,49 @@ class Meters:
         want = 3 if PROFILE.get("register_type", "holding") == "holding" else 4
         if fc != want or not 1 <= count <= 125:
             return bytes([fc | 0x80, 1])
+        if MISSING & set(range(addr, addr + count)):
+            return bytes([fc | 0x80, 2])  # illegal data address, as a meter answers for a value it does not have
         regs = self.registers(unit)
         data = b"".join(struct.pack(">H", regs.get(a, 0)) for a in range(addr, addr + count))
         return bytes([fc, len(data)]) + data
+
+
+def rtu_frames(read, write, meters: "Meters"):
+    """Answer Modbus RTU requests on a byte stream (serial port or pty). Blocking; run in a thread."""
+    buf = b""
+    while True:
+        chunk = read()
+        if not chunk:
+            continue
+        buf += chunk
+        while len(buf) >= 8:
+            frame = buf[:8]
+            if crc16(frame[:6]) != struct.unpack("<H", frame[6:])[0]:
+                buf = buf[1:]  # out of step: drop a byte and look again
+                continue
+            buf = buf[8:]
+            unit, fc, addr, count = struct.unpack(">BBHH", frame[:6])
+            resp = meters.answer(unit, fc, addr, count)
+            if resp is None:
+                continue  # no meter at this address: stay silent like RS485
+            body = bytes([unit]) + resp
+            write(body + struct.pack("<H", crc16(body)))
+
+
+def serve_serial(a, meters: "Meters"):
+    if a.pty:
+        import os
+        import pty
+        import tty
+        master, slave = pty.openpty()
+        tty.setraw(slave)
+        print(os.ttyname(slave), flush=True)
+        print(f"fake meter on virtual serial port {os.ttyname(slave)}, units {a.units}", file=sys.stderr, flush=True)
+        rtu_frames(lambda: os.read(master, 256), lambda b: os.write(master, b), meters)
+    import serial
+    ser = serial.Serial(a.serial, a.baud, parity=a.parity, stopbits=a.stopbits, timeout=0.05)
+    print(f"fake meter on {a.serial} at {a.baud} baud, units {a.units}", file=sys.stderr, flush=True)
+    rtu_frames(lambda: ser.read(256), ser.write, meters)
 
 
 async def main():
@@ -92,10 +135,25 @@ async def main():
     ap.add_argument("--units", type=int, nargs="+", default=[1])
     ap.add_argument("--framing", choices=["tcp", "rtu"], default="tcp")
     ap.add_argument("--profile", default="generic_float32_template")
+    ap.add_argument("--word-order", choices=["big", "little"], help="answer in this word order instead of the profile's")
+    ap.add_argument("--missing", nargs="*", default=[], help="parameters this meter does not have, e.g. thd_v thd_i")
+    ap.add_argument("--pty", action="store_true", help="Linux/Mac: answer on a new virtual serial port")
+    ap.add_argument("--serial", help="answer on this serial port, e.g. COM5 or /dev/ttyUSB1")
+    ap.add_argument("--baud", type=int, default=9600)
+    ap.add_argument("--parity", default="N")
+    ap.add_argument("--stopbits", type=int, default=1)
     a = ap.parse_args()
     global PROFILE
     PROFILE = json.loads((PROFILES / f"{a.profile}.json").read_text())
+    if a.word_order:
+        PROFILE["word_order"] = a.word_order
+    for param in a.missing:
+        r = PROFILE["registers"][param]
+        start = r["address"] + PROFILE.get("address_offset", 0)
+        MISSING.update(range(start, start + {"int16": 1, "uint16": 1, "float64": 4, "int64": 4, "uint64": 4}.get(r.get("type", "float32"), 2)))
     meters = Meters(a.units)
+    if a.pty or a.serial:
+        return await asyncio.to_thread(serve_serial, a, meters)
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         try:

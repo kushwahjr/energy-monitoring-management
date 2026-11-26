@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import time
+import contextlib
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -22,12 +23,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import auth
-from .collector import Collector, check_alarms
-from .config import PAGES, Alarms, Config, ConfigError, Meter, is_dg, library_profiles, parse_config, parse_users
+from .collector import Collector, check_alarms, has_voltage
+from .config import KIND_ALIASES, PAGES, Alarms, Config, ConfigError, Meter, is_dg, library_profiles, parse_config, parse_users
 from . import dg as dgmod
 from .db import Database
 from .params import PARAM_KEYS, PARAMS
 from .insights import analyse, ask_claude, tariff_from
+from .readers import ModbusPortReader, SimulatedReader, serial_ports
 from .reports import daily_report, day_range, parse_shifts, shift_report
 from .sync import CloudSyncer
 
@@ -852,30 +854,84 @@ def create_app(config_path: str | Path) -> FastAPI:
             raise HTTPException(400, str(e))
         return {"ok": True}
 
+    @api.get("/api/settings/serial-ports")
+    async def list_serial_ports(_=Depends(need_admin)):
+        """COM ports on the plant PC, so the technician can pick the USB-RS485 converter instead of guessing."""
+        return {"ports": serial_ports()}
+
+    @api.post("/api/settings/remove-demo")
+    async def remove_demo(_=Depends(need_admin)):
+        """Take out the simulated demo machines and their made-up history, before connecting real meters.
+        Panels, branding, users, shifts and tariff stay."""
+        if state.config.mode != "plant":
+            raise HTTPException(400, "settings can be edited on the plant PC only")
+        raw = json.loads(json.dumps(state.raw))
+        sim = {n for n, p in raw.get("ports", {}).items() if KIND_ALIASES.get(p.get("kind")) == "simulator"}
+
+        def demo(m: dict) -> bool:  # simulated, or one of the switched-off examples shipped in config.example.json
+            return m.get("port") in sim or (not m.get("enabled", True) and str(m.get("id", "")).endswith("_example"))
+        gone = [str(m.get("id")) for m in raw.get("meters", []) if demo(m)]
+        raw["meters"] = [m for m in raw.get("meters", []) if not demo(m)]
+        used = {m.get("port") for m in raw["meters"]}
+        raw["ports"] = {n: p for n, p in raw.get("ports", {}).items() if n in used}
+        if not raw["ports"]:  # leave one RS485 connection ready to fill in, on the USB converter if one is plugged in
+            usb = next((x["device"] for x in serial_ports() if x["usb"]), "")
+            raw["ports"]["rs485_1"] = {"kind": "rs485", "serial_port": usb or "COM3", "baudrate": 9600, "parity": "N", "stopbits": 1, "timeout": 1.0}
+        pics = raw.get("branding", {}).get("machine_pictures", {})
+        for mid in gone:
+            pics.pop(mid, None)
+        try:
+            await state.apply_settings(raw)
+        except ConfigError as e:
+            raise HTTPException(400, str(e))
+        state.db.delete_meters(gone)
+        insight_cache.clear()
+        return {"ok": True, "removed": len(gone)}
+
     @api.post("/api/settings/test-meter")
     async def test_meter(body: dict, _=Depends(need_admin)):
         """Read one meter once with the given (unsaved) settings, so a technician can check wiring."""
         raw = json.loads(json.dumps(state.raw))
         raw["ports"] = body.get("ports", raw.get("ports", {}))
         raw["profiles"] = {**raw.get("profiles", {}), **body.get("profiles", {})}
-        raw["meters"] = [body["meter"]]
+        meter = dict(body.get("meter") or {})
+        meter["id"] = meter.get("id") or "test"
+        raw["meters"] = [meter]
         try:
             cfg = parse_config(raw, state.config_path.parent)
         except ConfigError as e:
             raise HTTPException(400, str(e))
-        tmp = Collector(cfg, state.db)
         m = cfg.meters[0]
         port = cfg.ports[m.port]
-        try:
-            if port.kind == "simulator":
-                values = await tmp.sim.read(m)
+        if port.kind == "simulator":
+            return {"ok": True, "values": await SimulatedReader().read(m), "hint": None, "skipped": []}
+
+        def same_place(a, b) -> bool:
+            if a.kind == "rs485" or b.kind == "rs485":
+                return a.kind == b.kind == "rs485" and a.serial_port.strip().upper() == b.serial_port.strip().upper()
+            return a.host == b.host and a.tcp_port == b.tcp_port
+
+        def settings(p) -> dict:
+            d = dataclasses.asdict(p)
+            d.pop("name")
+            return d
+
+        live_readers = state.collector.port_readers.values() if state.collector else []
+        live = next((r for r in live_readers if same_place(r.port, port)), None)
+        prof = cfg.profiles[m.profile]
+        async with contextlib.AsyncExitStack() as stack:
+            if live and settings(live.port) == settings(port):
+                reader = live  # its lock keeps the test from colliding with polling on RS485
             else:
-                # share the live port lock so a test does not collide with polling on RS485
-                live = state.collector.port_readers.get(m.port) if state.collector else None
-                reader = live if live and dataclasses.asdict(live.port) == dataclasses.asdict(port) else tmp.port_readers[m.port]
-                prof = cfg.profiles[m.profile]
+                reader = ModbusPortReader(port)
+                stack.push_async_callback(reader.close)  # always let go of the port, also after an error
+                if live and port.kind == "rs485":
+                    # Windows lets only one program hold a COM port: pause logging on it and close it during the test.
+                    await stack.enter_async_context(live.lock)
+                    live.drop()
+            try:
                 values = await reader.read(m, prof)
-                hint = None
+                hint, fix = None, None
                 # Many manuals do not say which 16-bit word comes first. Frequency must be 45-65 Hz,
                 # so if it is not, try the other order and tell the technician which one works.
                 if "hz" in {r.param for r in prof.registers} and not 45 <= values.get("hz", 0) <= 65:
@@ -883,17 +939,17 @@ def create_app(config_path: str | Path) -> FastAPI:
                     alt = await reader.read(m, dataclasses.replace(prof, word_order=other))
                     if 45 <= alt.get("hz", 0) <= 65:
                         values = alt
-                        hint = (f"Readings only make sense with word order '{other}'. Add \"word_order\": \"{other}\" "
-                                f"to the '{m.profile}' model, or copy it under a new name with that change.")
+                        fix = {"profile": m.profile, "word_order": other}
+                        hint = ("These readings only make sense with the two halves of each value swapped (word order "
+                                f"'{other}'). Press Use this word order, then Save and restart logging.")
+                    elif values.get("hz", 0) == 0 and not has_voltage(values):
+                        hint = "The meter answered, but shows no voltage and 0 Hz. Is the meter's voltage input connected and live?"
                     else:
-                        hint = ("Frequency does not read as 45-65 Hz in either word order. Check the Modbus address, "
-                                "the register map for this model, and the 1-based/0-based address setting.")
-                if reader is not live:
-                    await reader.close()
-                return {"ok": True, "values": values, "hint": hint}
-        except Exception as e:
-            return {"ok": False, "error": str(e) or type(e).__name__}
-        return {"ok": True, "values": values}
+                        hint = ("Frequency does not read as 45-65 Hz in either word order. Check that the meter model is right; "
+                                "if it is, the register map for this model needs checking against the meter's manual.")
+                return {"ok": True, "values": values, "hint": hint, "fix": fix, "skipped": reader.skipped.get(m.id, [])}
+            except Exception as e:
+                return {"ok": False, "error": str(e) or type(e).__name__}
 
     # ---------- web app ----------
     @api.get("/")

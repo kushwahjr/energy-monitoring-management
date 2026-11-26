@@ -115,7 +115,7 @@ class Collector:
                 values = await self.port_readers[meter.port].read(meter, self.config.profiles[meter.profile])
         except (ReadError, OSError, asyncio.TimeoutError) as e:
             if st.online or st.last_error is None:
-                self.db.insert_event(int(now), meter.id, "offline", f"No response: {e}", True)
+                self.db.insert_event(int(now), meter.id, "offline", f"Offline: {e}", True)
                 log.warning("%s offline: %s", meter.id, e)
             st.online = False
             st.last_error = str(e)

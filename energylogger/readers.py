@@ -3,15 +3,57 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import random
+import re
 import time
 
 from .config import Meter, Port, Profile, Register
 
+# pymodbus logs every timeout with a hex dump; the collector logs one plain line when a meter goes offline instead.
+logging.getLogger("pymodbus").setLevel(logging.CRITICAL)
+
 
 class ReadError(Exception):
     pass
+
+
+def serial_ports() -> list[dict]:
+    """Serial (COM) ports on this computer, USB-RS485 converters first."""
+    try:
+        from serial.tools import list_ports
+        found = list_ports.comports()
+    except Exception:
+        return []
+    out = []
+    for p in found:
+        desc = p.description if p.description and p.description != "n/a" else ""
+        desc = re.sub(rf"\s*\({re.escape(p.device)}\)$", "", desc)  # Windows: "USB-SERIAL CH340 (COM4)"
+        usb = p.vid is not None
+        if not usb and not desc and not p.device.upper().startswith("COM"):
+            continue  # Linux lists many unused on-board ttyS ports
+        out.append({"device": p.device, "description": desc, "usb": usb})
+    out.sort(key=lambda x: (not x["usb"], x["device"]))
+    return out
+
+
+def ports_text() -> str:
+    found = serial_ports()
+    if not found:
+        return "No serial ports were found on this PC: plug in the USB-RS485 converter and install its driver (CH340, CP210x, FTDI or PL2303)."
+    return "Serial ports on this PC: " + ", ".join(f"{p['device']}" + (f" ({p['description']})" if p["description"] and p["description"] != p["device"] else "") for p in found) + "."
+
+
+MODBUS_EXCEPTIONS = {
+    1: "it does not support this kind of read (function {fc}). The meter model chosen is probably wrong",
+    2: "register {addr} does not exist on it. The meter model chosen is probably wrong, or its register numbers are off by one",
+    3: "it cannot send {count} registers in one go. Lower \"max_block\" for this model",
+    4: "it reported an internal failure",
+    6: "it is busy. It will be tried again",
+    10: "the gateway has no route to this meter. Check the gateway's settings",
+    11: "the gateway got no answer from the meter behind it (ID {unit}). Check the meter's ID, the gateway's RS485 baud rate and parity, and the A/B wires",
+}
 
 
 def plan_blocks(profile: Profile, gap: int = 6) -> list[tuple[int, int, list[Register]]]:
@@ -51,6 +93,9 @@ def derive_missing(v: dict[str, float]) -> dict[str, float]:
     return v
 
 
+PARITY = {"N": "none", "E": "even", "O": "odd"}
+
+
 class ModbusPortReader:
     """One connection (TCP host or serial port), shared by all meters on it.
 
@@ -61,6 +106,7 @@ class ModbusPortReader:
         self.port = port
         self.lock = asyncio.Lock()
         self.client = None
+        self.skipped: dict[str, list[str]] = {}  # meter id -> parameters its meter refused at the last read
 
     def _make_client(self):
         from pymodbus import FramerType
@@ -82,25 +128,79 @@ class ModbusPortReader:
         if not self.client.connected:
             ok = await self.client.connect()
             if not ok:
-                raise ReadError(f"cannot connect to {self.describe()}")
+                self.drop()
+                raise ReadError(self.connect_problem())
+
+    def drop(self):
+        """Close the connection; the next read opens a fresh one."""
+        if self.client is not None:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+        self.client = None
 
     def describe(self) -> str:
         p = self.port
         return p.serial_port if p.kind == "rs485" else f"{p.host}:{p.tcp_port}"
 
+    def connect_problem(self) -> str:
+        p = self.port
+        if p.kind != "rs485":
+            what = "the gateway" if p.kind == "gateway" else "the meter"
+            return (f"Cannot reach {what} at {p.host} port {p.tcp_port}. Check the IP address, the network cable, and that this PC "
+                    f"is on the same network (in a Command Prompt: ping {p.host}).")
+        why = ""
+        try:  # pymodbus does not say why a serial port would not open, so try it once directly
+            import serial
+            serial.Serial(p.serial_port, p.baudrate, timeout=0.1).close()
+        except Exception as e:
+            why = str(e)
+        if "denied" in why.lower() or "busy" in why.lower() or "permission" in why.lower():
+            return (f"{p.serial_port} is in use by another program. Close any other meter or Modbus software "
+                    f"(and the meter's own PC tool), then try again.")
+        if not any(x["device"].upper() == p.serial_port.upper() for x in serial_ports()):
+            return f"{p.serial_port} was not found. {ports_text()}"
+        return f"Cannot open {p.serial_port}{': ' + why if why else ''}. {ports_text()}"
+
+    def no_answer(self, meter: Meter) -> str:
+        p = self.port
+        if p.kind == "rs485":
+            return (f"No answer from meter ID {meter.unit_id} on {p.serial_port} at {p.baudrate} baud, parity {PARITY.get(p.parity, p.parity)}, "
+                    f"{p.stopbits} stop bit. Check that the meter's own communication settings show the same ID, baud rate and parity, "
+                    f"and check the A(+) and B(-) wires (if unsure, swap them).")
+        if p.kind == "gateway":
+            return (f"The gateway at {p.host} gave no answer for meter ID {meter.unit_id}. Check the meter's ID, the gateway's RS485 "
+                    f"settings (baud rate, parity) and its type: Modbus TCP gateway or transparent.")
+        return (f"The meter at {p.host} is reachable but gave no Modbus answer for ID {meter.unit_id}. Check the meter's Modbus ID "
+                f"(many Ethernet meters use 1 or 255) and that Modbus TCP is switched on in the meter.")
+
+    def refused(self, meter: Meter, rr, fc: int, addr: int, count: int) -> str:
+        code = getattr(rr, "exception_code", None)
+        why = MODBUS_EXCEPTIONS.get(code, f"error code {code}").format(fc=fc, addr=addr, count=count, unit=meter.unit_id)
+        return f"Meter ID {meter.unit_id} answered, but {why}."
+
     async def read(self, meter: Meter, profile: Profile) -> dict[str, float]:
         from pymodbus.client import ModbusBaseClient
+        from pymodbus.exceptions import ConnectionException, ModbusIOException
 
         async with self.lock:
             await self._ensure()
-            fn = self.client.read_holding_registers if profile.register_type == "holding" else self.client.read_input_registers
+            holding = profile.register_type == "holding"
+            fn = self.client.read_holding_registers if holding else self.client.read_input_registers
 
             async def fetch(start: int, count: int):
                 try:
                     return await fn(start, count=count, device_id=meter.unit_id)
-                except Exception as e:  # timeouts, broken connection
-                    self.client.close()
-                    raise ReadError(f"{meter.id}: {e}") from e
+                except (ModbusIOException, asyncio.TimeoutError, TimeoutError) as e:
+                    self.drop()  # also clears any late reply, so it cannot be taken as the next meter's answer
+                    raise ReadError(self.no_answer(meter)) from e
+                except ConnectionException as e:
+                    self.drop()
+                    raise ReadError(f"Connection to {self.describe()} was lost ({e}). It will be opened again.") from e
+                except Exception as e:  # anything else from the connection
+                    self.drop()
+                    raise ReadError(f"{self.describe()}: {e}") from e
 
             def decode(r: Register, words) -> None:
                 dtype = getattr(ModbusBaseClient.DATATYPE, r.type.upper())
@@ -112,29 +212,34 @@ class ModbusPortReader:
                     values[r.param] = v
 
             values: dict[str, float] = {}
+            skipped: list[str] = []
+            first_refusal = None
             for start, count, regs in plan_blocks(profile):
                 rr = await fetch(start, count)
-                if rr.isError():
-                    if len(regs) == 1:
-                        raise ReadError(f"{meter.id}: Modbus error at {start} ({rr})")
-                    # Some meters refuse a block that spans reserved registers: read one by one instead.
-                    ok = 0
+                if not rr.isError():
                     for r in regs:
-                        one = await fetch(r.address + profile.address_offset, r.length)
-                        if not one.isError():
-                            decode(r, one.registers)
-                            ok += 1
-                    if ok == 0:
-                        raise ReadError(f"{meter.id}: Modbus error at {start} ({rr})")
+                        off = r.address + profile.address_offset - start
+                        decode(r, rr.registers[off: off + r.length])
                     continue
+                if first_refusal is None:
+                    first_refusal = self.refused(meter, rr, 3 if holding else 4, start, count)
+                if getattr(rr, "exception_code", None) in (4, 6, 10, 11):
+                    raise ReadError(first_refusal)  # the meter (or gateway) itself has a problem, not this block
+                # Some meters refuse a block that spans reserved registers, or lack a value that a sister model
+                # has (for example THD): read one by one, keep what the meter has and skip the rest.
                 for r in regs:
-                    off = r.address + profile.address_offset - start
-                    decode(r, rr.registers[off: off + r.length])
+                    one = rr if len(regs) == 1 else await fetch(r.address + profile.address_offset, r.length)
+                    if one.isError():
+                        skipped.append(r.param)
+                    else:
+                        decode(r, one.registers)
+            if not values:
+                raise ReadError(first_refusal or f"Meter ID {meter.unit_id} sent no usable values.")
+            self.skipped[meter.id] = skipped
             return derive_missing(values)
 
     async def close(self):
-        if self.client is not None:
-            self.client.close()
+        self.drop()
 
 
 class SimulatedReader:
